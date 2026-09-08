@@ -35,7 +35,7 @@ export function parseRfc3339(value: string): number {
         day > daysInMonth(year, month) ||
         hour > 23 ||
         minute > 59 ||
-        second > 59 ||
+        second > 60 ||
         offsetHour > 23 ||
         offsetMinute > 59
     ) {
@@ -43,8 +43,21 @@ export function parseRfc3339(value: string): number {
     }
 
     const milliseconds = fraction ? `.${fraction.slice(0, 3).padEnd(3, '0')}` : '';
-    const normalized = `${yearText}-${monthText}-${dayText}T${hourText}:${minuteText}:${secondText}${milliseconds}${value.at(-1)?.toUpperCase() === 'Z' ? 'Z' : value.slice(-6)}`;
-    return Date.parse(normalized);
+    // A leap second clamps to :59.999 and must end a UTC month, as the Rust SDK's RFC 3339 parse does.
+    const secondWithFraction = second === 60 ? '59.999' : `${secondText}${milliseconds}`;
+    const normalized = `${yearText}-${monthText}-${dayText}T${hourText}:${minuteText}:${secondWithFraction}${value.at(-1)?.toUpperCase() === 'Z' ? 'Z' : value.slice(-6)}`;
+    const instant = Date.parse(normalized);
+    if (second === 60) {
+        const utc = new Date(instant);
+        if (
+            utc.getUTCHours() !== 23 ||
+            utc.getUTCMinutes() !== 59 ||
+            utc.getUTCDate() !== daysInMonth(utc.getUTCFullYear(), utc.getUTCMonth() + 1)
+        ) {
+            return Number.NaN;
+        }
+    }
+    return instant;
 }
 
 function daysInMonth(year: number, month: number): number {
