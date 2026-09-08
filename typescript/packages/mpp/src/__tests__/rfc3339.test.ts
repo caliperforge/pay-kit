@@ -29,7 +29,7 @@ describe('parseRfc3339', () => {
         '2026-01-29T03:60:05Z',
         ' 2026-01-29T12:00:00Z',
         '2026-01-29T12:00:00Z\n',
-        '2016-12-31T23:59:60Z',
+        '2026-01-29T12:00:61Z',
     ])('rejects non-RFC 3339 input %s', value => {
         expect(parseRfc3339(value)).toBeNaN();
     });
