@@ -71,5 +71,6 @@ struct ExpiresRFC3339Tests {
         let challenge = try challenge("1990-12-31T23:59:60Z")
         #expect(!challenge.isExpired(now: Date(timeIntervalSince1970: 662_687_999)))  // :59Z
         #expect(challenge.isExpired(now: Date(timeIntervalSince1970: 662_688_000)))  // next day 00:00Z
+        for s in ["1998-12-30T23:59:60Z", "1998-12-31T23:58:60Z"] { #expect(try self.challenge(s).isExpired(now: Self.anchor), "\(s)") }
     }
 }
