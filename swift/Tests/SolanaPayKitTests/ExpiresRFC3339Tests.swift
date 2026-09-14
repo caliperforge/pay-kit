@@ -2,10 +2,7 @@ import Foundation
 import Testing
 @testable import SolanaPayKit
 
-/// The 39 RFC 3339 `date-time` vectors on which `PaymentChallenge.isExpired` diverged from the
-/// Rust reference `protocol::core::challenge::is_expired`: 30 the old `ISO8601DateFormatter`
-/// pair accepted and Rust rejects, 9 it rejected and Rust accepts. `accept` is the corpus
-/// verdict; the anchor predates every vector, so a row measures parsing, not elapsed time.
+/// The 39 date-time vectors where the old parser diverged from the Rust reference; the anchor predates every vector, so a row tests parsing, not time.
 @Suite("MPP expires RFC 3339 conformance")
 struct ExpiresRFC3339Tests {
     private static let anchor = Date(timeIntervalSince1970: -100_000_000_000)  // ~1199 BCE

@@ -73,11 +73,7 @@ public struct PaymentChallenge: Codable, Equatable, Sendable {
         return parsed <= now
     }
 
-    /// Strict RFC 3339 §5.6 `date-time`, replacing `ISO8601DateFormatter`, which normalises
-    /// out-of-range input instead of refusing it. Fixed-width fields, proleptic-Gregorian
-    /// calendar, case-insensitive `T`/`Z`, offset `±23:59` applied before the calendar check,
-    /// `secfrac` of any length truncated (never rounded), whole string consumed. A leap second
-    /// is taken only at `23:59:60` UTC on a month's last day (§5.7) and clamps into `:59`.
+    /// Strict RFC 3339 §5.6 date-time; ISO8601DateFormatter normalises out-of-range input instead of refusing it.
     private static func parseRFC3339(_ value: String) -> Date? {
         let b = Array(value.utf8)
         func num(_ at: Int, _ n: Int) -> Int? {
