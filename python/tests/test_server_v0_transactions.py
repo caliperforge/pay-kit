@@ -1,15 +1,17 @@
 """V0 (versioned) transaction coverage for ``solana_pay_kit.protocols.mpp.server.charge``.
 
-Legacy (unversioned) transactions are not supported anywhere in pay-kit: every
-server-side decode boundary runs ``require_versioned_wire`` first and rejects
-them with one shared message, so ``_decode_legacy_payment_instructions``,
-``_co_sign_with_fee_payer``, and ``_validate_instruction_allowlist`` only ever
-hand versioned bytes to ``VersionedTransaction.from_bytes``. This file covers
-the guard itself, the v0 allowlist happy path under repeated random keypairs
-(which used to be a probabilistic mis-parse through the lenient legacy
-parser), cosign on an unsigned v0 wire form, the multi-signer rogue-fee-payer
-slot rejection, the missing-account-keys rejection, and the legacy rejection
-on each helper. These mirror the Rust spine's invariants in
+Every server-side decode boundary hands the wire bytes to
+``VersionedTransaction.from_bytes``, which dispatches on the message-version
+prefix: v0 (``0x80``) and legacy (unprefixed) messages both decode, so
+``_decode_legacy_payment_instructions``, ``_co_sign_with_fee_payer``, and
+``_validate_instruction_allowlist`` verify a pre-cutover client's legacy wire
+under the same rules as v0. Clients never build legacy any more. This file
+covers the prefix detector, the v0 allowlist happy path under repeated random
+keypairs (which used to be a probabilistic mis-parse through the lenient
+legacy parser), cosign on an unsigned v0 wire form, the multi-signer
+rogue-fee-payer slot rejection, the missing-account-keys rejection, the
+reported-version policy, and legacy acceptance on each helper. These mirror
+the Rust spine's invariants in
 ``rust/crates/mpp/src/server/charge.rs``.
 """
 
@@ -27,11 +29,9 @@ from solders.transaction import VersionedTransaction
 from solana_pay_kit._paycore.errors import PaymentError
 from solana_pay_kit._paycore.solana import MethodDetails
 from solana_pay_kit._paycore.transaction import (
-    LEGACY_TRANSACTION_REJECTED,
     TRANSACTION_VERSION_NOT_REPORTED,
     is_v0_wire_bytes,
     require_reported_version,
-    require_versioned_wire,
 )
 from solana_pay_kit.protocols.mpp.intents.charge import ChargeRequest
 from solana_pay_kit.protocols.mpp.server import charge as M
@@ -204,7 +204,7 @@ def test_allowlist_v0_native_transfer_accepted_no_lenient_misparse():
 
 
 def test_is_v0_wire_bytes_classifies_correctly():
-    """The v0-wire detector must accept v0 bytes and reject legacy bytes."""
+    """The v0-wire detector classifies v0 bytes as versioned and legacy bytes as not."""
     from solders.message import Message
     from solders.transaction import Transaction
 
@@ -236,7 +236,7 @@ def test_allowlist_invalid_bytes_rejected_with_invalid_payload_type():
 
 
 # ---------------------------------------------------------------------------
-# Legacy (unversioned) wires are rejected at every charge decode boundary
+# Legacy (unversioned) wires are accepted at every charge decode boundary
 # ---------------------------------------------------------------------------
 
 
@@ -251,43 +251,36 @@ def _legacy_tx(payer: Keypair, instructions, signers=None) -> tuple[bytes, str]:
     return raw, base64.b64encode(raw).decode("ascii")
 
 
-def test_require_versioned_wire_rejects_legacy_and_passes_versioned():
+def test_versioned_transaction_from_bytes_decodes_legacy_and_v0():
+    from solders.message import Message
+
     payer = Keypair()
     ix = transfer(TransferParams(from_pubkey=payer.pubkey(), to_pubkey=Keypair().pubkey(), lamports=1))
     legacy_raw, _ = _legacy_tx(payer, [ix])
-    with pytest.raises(ValueError, match="^legacy transactions are not supported") as exc:
-        require_versioned_wire(legacy_raw)
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
+    assert not is_v0_wire_bytes(legacy_raw)
+    legacy = VersionedTransaction.from_bytes(legacy_raw)
+    assert isinstance(legacy.message, Message)
+    assert bytes(legacy) == legacy_raw
 
-    # The caller-supplied error factory shapes the raised exception.
-    with pytest.raises(PaymentError) as perr:
-        require_versioned_wire(legacy_raw, error=lambda m: PaymentError(m, code="invalid-payload"))
-    assert perr.value.code == "invalid-payload"
+    v0_raw = base64.b64decode(_v0_tx_b64(payer, [ix]))
+    assert is_v0_wire_bytes(v0_raw)
+    assert isinstance(VersionedTransaction.from_bytes(v0_raw).message, MessageV0)
 
-    # v0 passes; so does a v1 prefix (0x81), which solders then rejects on decode.
-    require_versioned_wire(base64.b64decode(_v0_tx_b64(payer, [ix])))
-    v1_raw = bytearray(base64.b64decode(_v0_tx_b64(payer, [ix])))
+    # A v1 prefix (0x81) is refused by solders until it implements v1.
+    v1_raw = bytearray(v0_raw)
     v1_raw[1 + 64] = 0x81
-    require_versioned_wire(bytes(v1_raw))
     with pytest.raises(Exception):  # noqa: B017 - solders has no v1 parser yet
         VersionedTransaction.from_bytes(bytes(v1_raw))
-
-    # Truncated wires are left to the decoder, not misreported as legacy.
-    require_versioned_wire(b"")
-    require_versioned_wire(b"\x01")
-    require_versioned_wire(b"\x01" + bytes(64))
 
 
 def test_require_reported_version_mirrors_check_reported_version():
     """Signature credentials are fetched by ``getTransaction``; the top-level
     ``version`` of the result is policed like the wire prefix is for
-    transaction credentials (Rust ``core::tx::check_reported_version``)."""
+    transaction credentials (Rust ``core::tx::check_reported_version``):
+    0, 1 and legacy (policed as 0) are accepted, a missing version is not."""
     require_reported_version(0)
     require_reported_version(1)
-
-    with pytest.raises(ValueError) as exc:
-        require_reported_version("legacy")
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
+    require_reported_version("legacy")
 
     with pytest.raises(ValueError) as exc:
         require_reported_version(None)
@@ -299,27 +292,25 @@ def test_require_reported_version_mirrors_check_reported_version():
 
     # The caller-supplied error factory shapes the raised exception.
     with pytest.raises(PaymentError) as perr:
-        require_reported_version("legacy", error=lambda m: PaymentError(m, code="invalid-payload"))
+        require_reported_version(None, error=lambda m: PaymentError(m, code="invalid-payload"))
     assert perr.value.code == "invalid-payload"
 
 
-def test_cosign_rejects_legacy_transaction():
+def test_cosign_accepts_legacy_transaction():
+    from solders.transaction import Transaction
+
     fee_payer = Keypair()
     ix = transfer(TransferParams(from_pubkey=fee_payer.pubkey(), to_pubkey=Keypair().pubkey(), lamports=1))
     _, tx_b64 = _legacy_tx(fee_payer, [ix])
-    with pytest.raises(PaymentError) as exc:
-        M._co_sign_with_fee_payer(tx_b64, fee_payer)
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-    assert exc.value.code == "invalid-payload-type"
+    signed = Transaction.from_bytes(base64.b64decode(M._co_sign_with_fee_payer(tx_b64, fee_payer)))
+    signed.verify()
 
 
-def test_allowlist_rejects_legacy_transaction():
+def test_allowlist_accepts_legacy_transaction():
     payer = Keypair()
     recipient = Keypair()
     ix = transfer(TransferParams(from_pubkey=payer.pubkey(), to_pubkey=recipient.pubkey(), lamports=1000))
     _, tx_b64 = _legacy_tx(payer, [ix])
     request, details = _native_charge(recipient.pubkey(), 1000)
-    with pytest.raises(PaymentError) as exc:
-        M._validate_instruction_allowlist(tx_b64, request, details)
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-    assert exc.value.code == "invalid-payload-type"
+    # No exception: the legacy SOL transfer is matched under the v0 rules.
+    M._validate_instruction_allowlist(tx_b64, request, details)

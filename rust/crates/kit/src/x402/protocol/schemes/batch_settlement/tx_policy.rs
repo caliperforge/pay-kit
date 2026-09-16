@@ -816,7 +816,7 @@ mod tests {
         /// Compile `instructions` with the sponsor as fee payer and the payer as
         /// the second signer, then sign the payer slot for real.
         fn sign(&self, instructions: &[Instruction]) -> String {
-            let message = VersionedMessage::V0(
+            self.sign_message(VersionedMessage::V0(
                 solana_message::v0::Message::try_compile(
                     &self.fee_payer,
                     instructions,
@@ -824,7 +824,19 @@ mod tests {
                     Hash::new_unique(),
                 )
                 .unwrap(),
-            );
+            ))
+        }
+
+        /// The same payload framed as a legacy (unprefixed) message.
+        fn sign_legacy(&self, instructions: &[Instruction]) -> String {
+            self.sign_message(VersionedMessage::Legacy(Message::new_with_blockhash(
+                instructions,
+                Some(&self.fee_payer),
+                &Hash::new_unique(),
+            )))
+        }
+
+        fn sign_message(&self, message: VersionedMessage) -> String {
             let bytes = message.serialize();
             let signature = Signature::from(self.payer_key.sign(&bytes).to_bytes());
             let signer_index = message
@@ -1174,33 +1186,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_legacy_envelope() {
+    fn accepts_a_legacy_envelope_as_version_zero() {
+        // Legacy bytes are what a pre-cutover client sends: never built by the
+        // kit, still accepted by the sponsor and held to the version-0 rules.
         let f = fixture();
-        let ixs = [
+        let tx = f.sign_legacy(&[
+            cu_limit_ix(90_000),
             pc::build_open_instruction(&f.open_params(100_000)),
             nonce_memo(),
-        ];
-        let message = VersionedMessage::Legacy(Message::new_with_blockhash(
-            &ixs,
-            Some(&f.fee_payer),
-            &Hash::new_unique(),
-        ));
-        let tx = VersionedTransaction {
-            signatures: vec![
-                Signature::default();
-                message.header().num_required_signatures as usize
-            ],
-            message,
-        };
-        // Legacy bytes are what a pre-cutover client would send.
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            bincode::serialize(&tx).unwrap(),
-        );
-        let err =
-            validate_setup_transaction(&encoded, SetupForm::Open, &f.expectations(), 100_000, None)
-                .unwrap_err();
-        assert!(err.detail.contains("legacy"), "{}", err.detail);
+        ]);
+        let validated = validate_setup_transaction(
+            &tx,
+            SetupForm::Open,
+            &f.expectations(),
+            100_000,
+            Some(341_000_100),
+        )
+        .expect("legacy open is accepted");
+        assert_eq!(validated.payer, f.payer);
     }
 
     #[test]

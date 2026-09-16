@@ -333,8 +333,7 @@ final class SolanaChargeHandler
             if ($wire === false) {
                 return false;
             }
-            // `MessageV0` stores the blockhash as a base58 string.
-            $blockhash = TransactionWire::deserialize($wire)->message->recentBlockhash;
+            $blockhash = TransactionWire::deserialize($wire)->recentBlockhash();
         } catch (Throwable) {
             return false;
         }

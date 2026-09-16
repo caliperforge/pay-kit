@@ -41,7 +41,9 @@ class HandlerPathsTest < Minitest::Test
     assert_match(/Simulation failed/, response.body["message"])
   end
 
-  def test_pull_rejects_legacy_transaction
+  def test_pull_settles_a_legacy_transaction
+    # A pre-cutover client's legacy (unprefixed) wire is verified and settled
+    # under the same rules as v0.
     request = charge_request
     rpc = FakeRpc.new(signature: valid_signature)
     handler = handler_with(rpc)
@@ -53,9 +55,9 @@ class HandlerPathsTest < Minitest::Test
 
     response = handler.handle(credential.to_authorization_header, request)
 
-    assert_equal 402, response.status
-    assert_equal "legacy transactions are not supported; use a version 0 or version 1 message", response.body["message"]
-    assert_empty rpc.simulated_transactions
+    assert_equal 200, response.status
+    assert_equal 1, rpc.simulated_transactions.length
+    assert_equal 1, rpc.sent_transactions.length
   end
 
   def test_pull_rejects_wrong_surfpool_network

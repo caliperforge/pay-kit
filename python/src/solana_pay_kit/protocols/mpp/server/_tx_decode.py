@@ -1,8 +1,8 @@
 """Transaction decoding and parsed-instruction verification for MPP charge.
 
 Pure, RPC-free helpers shared by the server charge flow: module constants
-mirrored from the Rust spine, the local transfer/memo decoders for v0
-transactions, the lossy parsed-instruction verifiers, and the small
+mirrored from the Rust spine, the local transfer/memo decoders for legacy and
+v0 transactions, the lossy parsed-instruction verifiers, and the small
 RPC-response coercion utilities. These never touch the replay store or the
 network; the orchestration and the strict no-leftovers allowlist live in
 :mod:`solana_pay_kit.protocols.mpp.server._verify` and
@@ -26,17 +26,9 @@ from solana_pay_kit._paycore.solana import (
     default_token_program_for_currency,
     resolve_mint,
 )
-from solana_pay_kit._paycore.transaction import require_versioned_wire
 from solana_pay_kit.protocols.mpp.intents.charge import ChargeRequest
 
 _SYSTEM_PROGRAM = "11111111111111111111111111111111"
-
-
-def _invalid_payload_type(message: str) -> PaymentError:
-    """Error factory for ``require_versioned_wire`` on the charge decode paths."""
-    return PaymentError(message, code="invalid-payload-type")
-
-
 _SYSTEM_TRANSFER_INSTRUCTION = 2
 _TOKEN_TRANSFER_CHECKED_INSTRUCTION = 12
 
@@ -330,17 +322,17 @@ def _status_ok(response: Any) -> bool:
 
 
 def _extract_recent_blockhash(transaction_b64: str) -> str:
-    """Decode a base64 v0 transaction and return its recent blockhash (base58).
+    """Decode a base64 (legacy or v0) transaction and return its recent blockhash (base58).
 
-    Legacy wires are rejected by ``require_versioned_wire``; the caller maps
-    any other decode failure to ``invalid-payload-type``. Kept thin so the
-    surrounding network check can be exercised by tests without a full
-    verification pipeline in place.
+    ``VersionedTransaction.from_bytes`` dispatches on the message-version
+    prefix, so legacy and v0 wires both decode; the caller maps any decode
+    failure to ``invalid-payload-type``. Kept thin so the surrounding network
+    check can be exercised by tests without a full verification pipeline in
+    place.
     """
     from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64)
-    require_versioned_wire(raw, error=_invalid_payload_type)
     return str(VersionedTransaction.from_bytes(raw).message.recent_blockhash)
 
 
@@ -400,18 +392,19 @@ def _validate_compute_budget_instruction(data: bytes, account_count: int, fee_sp
 
 
 def _decode_legacy_payment_instructions(transaction_b64: str) -> list[dict[str, Any]]:
-    """Decode local transfer and memo instructions from a v0 transaction.
+    """Decode local transfer and memo instructions from a legacy or v0 transaction.
 
-    Legacy wires are rejected by ``require_versioned_wire``. We only inspect
-    the static account keys; address lookup tables are rejected up-front (a
-    v0 tx with a non-empty ALT list would let an instruction reference
-    accounts the verifier cannot see). Mirrors the Rust spine's
-    ``verify_versioned_transaction_pre_broadcast`` policy.
+    ``VersionedTransaction.from_bytes`` dispatches on the message-version
+    prefix, so a pre-cutover client's legacy wire decodes alongside v0 and is
+    verified under the same rules. We only inspect the static account keys;
+    address lookup tables are rejected up-front (a v0 tx with a non-empty ALT
+    list would let an instruction reference accounts the verifier cannot
+    see). Mirrors the Rust spine's ``verify_versioned_transaction_pre_broadcast``
+    policy.
     """
     from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64)
-    require_versioned_wire(raw, error=_invalid_payload_type)
     try:
         vtx = VersionedTransaction.from_bytes(raw)
     except Exception as exc:

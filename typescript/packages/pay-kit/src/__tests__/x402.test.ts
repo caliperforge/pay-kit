@@ -98,8 +98,6 @@ function gateFor(config: PayKitConfig, amount = usd('0.10')): Gate {
     return Gate.create({ amount, name: 'test' }, gateDefaults(config));
 }
 
-const LEGACY_REJECTION = 'legacy transactions are not supported; use a version 0 or version 1 message';
-
 /** An unsigned, instruction-less wire transaction of the given message version. */
 function wireTransaction(version: TransactionVersion): string {
     const message = pipe(
@@ -158,21 +156,17 @@ describe('x402 exact adapter', () => {
         return { adapter, gate, request: new Request('http://localhost/r', { headers: { 'x-payment': header } }) };
     }
 
-    it('rejects a legacy (unversioned) transaction before the facilitator sees it', async () => {
-        const { adapter, gate, request } = await exactRequestFor(wireTransaction('legacy'));
-        const error = await adapter.verifyAndSettle(gate, request).catch((e: unknown) => e);
-        expect(error).toMatchObject({
-            code: 'invalid_exact_svm_payload_transaction_could_not_be_decoded',
-            message: LEGACY_REJECTION,
-        });
-    });
-
-    it('lets a version 0 transaction through to the facilitator', async () => {
-        const { adapter, gate, request } = await exactRequestFor(wireTransaction(0));
-        const error = await adapter.verifyAndSettle(gate, request).catch((e: unknown) => e);
-        expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).not.toBe(LEGACY_REJECTION);
-    });
+    it.each<TransactionVersion>(['legacy', 0])(
+        'lets a %s transaction through to the facilitator, which applies the version policy',
+        async version => {
+            const { adapter, gate, request } = await exactRequestFor(wireTransaction(version));
+            const error = await adapter.verifyAndSettle(gate, request).catch((e: unknown) => e);
+            // The minimal payload fails later in the facilitator, on its
+            // content: the adapter itself never rejects on message version.
+            expect(error).toBeInstanceOf(Error);
+            expect((error as Error).message).not.toMatch(/legacy/);
+        },
+    );
 });
 
 describe('x402 smart-wallet options', () => {
@@ -332,20 +326,15 @@ describe('x402 upto engine', () => {
         return { request: new Request('http://localhost/u', { headers: { 'x-payment': header } }), upto };
     }
 
-    it('rejects a legacy (unversioned) open transaction before any broadcast', async () => {
-        uptoSettleCalls.length = 0;
-        const { request, upto } = await verifyOpenRequestWith(wireTransaction('legacy'));
-        const error = await upto.verifyOpen(request, usd('1.00')).catch((e: unknown) => e);
-        expect(error).toMatchObject({ code: 'invalid_upto_svm_payload_open_transaction', message: LEGACY_REJECTION });
-        expect(uptoSettleCalls).toHaveLength(0);
-    });
-
-    it('lets a version 0 open transaction through to the facilitator', async () => {
-        const { request, upto } = await verifyOpenRequestWith(wireTransaction(0));
-        // The minimal payload fails later in the facilitator — proving the
-        // version guard did not fire.
-        await expect(upto.verifyOpen(request, usd('1.00'))).rejects.toThrow(/unsupported_payload_type/);
-    });
+    it.each<TransactionVersion>(['legacy', 0])(
+        'lets a %s open transaction through to the facilitator, which applies the version policy',
+        async version => {
+            const { request, upto } = await verifyOpenRequestWith(wireTransaction(version));
+            // The minimal payload fails later in the facilitator, on its
+            // content: the engine itself never rejects on message version.
+            await expect(upto.verifyOpen(request, usd('1.00'))).rejects.toThrow(/unsupported_payload_type/);
+        },
+    );
 
     it('rejects a payload without a decimal-string openSlot before any broadcast', async () => {
         const { request, upto } = await verifyOpenRequestFor('not-a-slot');

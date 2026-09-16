@@ -3,13 +3,15 @@
 use serde::{Deserialize, Serialize};
 use solana_message::{v1, VersionedMessage};
 
-use crate::core::{Error, Result};
+use crate::core::Result;
 
-/// A Solana transaction message version the kit supports.
+/// A Solana transaction message version the kit builds and advertises.
 ///
 /// Serializes as the integer the Wallet Standard uses for
 /// `supportedTransactionVersions` (`0`, `1`). `"legacy"` is deliberately not
-/// representable.
+/// representable: legacy (unprefixed) messages are never built or advertised.
+/// Servers still accept them from existing clients and police them as
+/// version 0, see [`TxVersion::of`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "u8", try_from = "u8")]
 pub enum TxVersion {
@@ -94,15 +96,17 @@ impl TxVersion {
         }
     }
 
-    /// The version of a decoded message. Legacy messages are an error: the kit
-    /// neither builds nor accepts them.
+    /// The policy version of a decoded message.
+    ///
+    /// A legacy (unprefixed) message is policed as version 0: it shares the
+    /// 1232-byte packet limit, carries its compute budget as ComputeBudget
+    /// instructions, and cannot reference address lookup tables. Servers keep
+    /// accepting legacy messages from existing clients for backward
+    /// compatibility whenever they accept version 0; the kit never builds or
+    /// advertises legacy itself.
     pub fn of(message: &VersionedMessage) -> Result<TxVersion> {
         match message {
-            VersionedMessage::Legacy(_) => Err(Error::Other(
-                "legacy transactions are not supported; use a version 0 or version 1 message"
-                    .into(),
-            )),
-            VersionedMessage::V0(_) => Ok(TxVersion::V0),
+            VersionedMessage::Legacy(_) | VersionedMessage::V0(_) => Ok(TxVersion::V0),
             VersionedMessage::V1(_) => Ok(TxVersion::V1),
         }
     }
@@ -140,6 +144,20 @@ mod tests {
         assert_eq!(accepted_versions(None), &[TxVersion::V0]);
         assert_eq!(accepted_versions(Some(&[])), &[TxVersion::V0]);
         assert_eq!(accepted_versions(Some(&[TxVersion::V1])), &[TxVersion::V1]);
+    }
+
+    #[test]
+    fn legacy_messages_are_policed_as_version_zero() {
+        let payer = solana_pubkey::Pubkey::new_unique();
+        let legacy = VersionedMessage::Legacy(solana_message::Message::new(
+            &[solana_system_interface::instruction::transfer(
+                &payer,
+                &solana_pubkey::Pubkey::new_unique(),
+                1,
+            )],
+            Some(&payer),
+        ));
+        assert_eq!(TxVersion::of(&legacy).unwrap(), TxVersion::V0);
     }
 
     #[test]

@@ -182,10 +182,7 @@ func (a *Adapter) VerifyAndSettle(req *paykit.AdapterRequest) (*paykit.Payment, 
 	}
 	tx, err := solanatx.DecodeTransaction(rawTx)
 	if err != nil {
-		if !errors.Is(err, solanatx.ErrLegacyTransaction) {
-			err = fmt.Errorf("transaction decode: %w", err)
-		}
-		return nil, &paykit.PaymentError{Code: "invalid_payload", Err: err, Gate: req.Gate}
+		return nil, &paykit.PaymentError{Code: "invalid_payload", Err: fmt.Errorf("transaction decode: %w", err), Gate: req.Gate}
 	}
 	if len(tx.Signatures) == 0 {
 		return nil, &paykit.PaymentError{Code: "invalid_payload", Err: errors.New("transaction carries no signatures"), Gate: req.Gate}

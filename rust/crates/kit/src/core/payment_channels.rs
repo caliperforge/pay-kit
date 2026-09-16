@@ -312,8 +312,8 @@ pub fn from_address(address: &Address) -> Pubkey {
     Pubkey::from(address.to_bytes())
 }
 
-/// Decode a base64 payload transaction: version 0 or version 1, canonical
-/// encoding, no legacy. See [`crate::core::tx::wire::decode`]. Shared by x402
+/// Decode a base64 payload transaction: legacy, version 0 or version 1 in
+/// canonical encoding. See [`crate::core::tx::wire::decode`]. Shared by x402
 /// (`upto`/`batch-settlement`) and the MPP session opener.
 pub fn decode_transaction(b64: &str) -> Result<VersionedTransaction> {
     crate::core::tx::decode(b64)

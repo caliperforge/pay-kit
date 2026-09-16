@@ -218,11 +218,14 @@ For an open transaction, verify all of the following before persistence:
 - confirmation succeeded; and
 - the resulting channel account matches the expected state.
 
-Reject address lookup tables, legacy messages, and any message version the
-challenge did not advertise (`methodDetails.transactionVersions`, default
-`[0]`) before inspecting instructions; on version 1 bound the header compute
-config with the same caps as the ComputeBudget prefix. A verifier that only
-sees static account keys must fail closed.
+Reject address lookup tables and any message version the challenge did not
+advertise (`methodDetails.transactionVersions`, default `[0]`) before
+inspecting instructions. A legacy (unprefixed) message is policed as version
+0: accept it whenever version 0 is accepted and hold it to the version-0
+rules, because pre-cutover clients still send it (no pay-kit client builds
+one). On version 1 bound the header compute config with the same caps as the
+ComputeBudget prefix. A verifier that only sees static account keys must fail
+closed.
 
 For top-up, bind the transaction to `channelId` and `additionalAmount`, require
 an actual increase, confirm it, and verify the resulting on-chain deposit is at

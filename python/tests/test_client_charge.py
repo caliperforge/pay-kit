@@ -231,8 +231,8 @@ async def test_build_charge_transaction_sponsored_fee_payer_is_message_slot_zero
 
 
 async def test_build_charge_transaction_emits_v0_message():
-    # The Rust servers reject legacy messages: the wire must carry the v0
-    # version prefix (0x80) as the first message byte after the signatures.
+    # Clients never build legacy messages: the wire must carry the v0 version
+    # prefix (0x80) as the first message byte after the signatures.
     signer = Keypair()
     payload = await build_charge_transaction(
         signer=signer,

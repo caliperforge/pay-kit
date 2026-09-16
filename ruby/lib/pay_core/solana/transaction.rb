@@ -7,9 +7,10 @@ require_relative "public_key"
 
 module PayCore
   module Solana
-    # Parsed v0 Solana transaction. Owns the binary codec; mirrors the Rust
-    # spine `rust/crates/core/src/solana/transaction.rs`. Legacy (unprefixed)
-    # messages are rejected at the decode boundary.
+    # Parsed legacy or v0 Solana transaction. Owns the binary codec; mirrors
+    # the Rust spine `rust/crates/core/src/solana/transaction.rs`. Clients
+    # only build v0, but servers keep accepting a pre-cutover client's legacy
+    # (unprefixed) message and police it under the v0 rules.
     #
     # `sign_with` raises `PayCore::Solana::Transaction::SigningError` by
     # default. Higher layers (solana-mpp, solana-x402) may subclass this
@@ -20,12 +21,6 @@ module PayCore
       # Raised when `sign_with` is asked to sign with a keypair that is not
       # a required signer of the parsed transaction.
       class SigningError < StandardError; end
-
-      # Raised when the message carries a version this codec refuses to
-      # decode. Surfaces its message verbatim through `from_base64`.
-      class UnsupportedVersionError < ArgumentError; end
-
-      LEGACY_UNSUPPORTED = "legacy transactions are not supported; use a version 0 or version 1 message"
 
       attr_reader :signatures, :message, :message_offset, :version
 
@@ -40,8 +35,6 @@ module PayCore
       def self.from_base64(value)
         raw = Base64.strict_decode64(value)
         from_bytes(raw)
-      rescue UnsupportedVersionError
-        raise
       rescue ArgumentError => error
         raise ArgumentError, "invalid transaction payload: #{error.message}"
       end
@@ -144,17 +137,17 @@ module PayCore
         @address_table_lookups = address_table_lookups
       end
 
-      # Parse a v0 transaction message. Legacy (unprefixed) messages are
-      # rejected; v1 is not implemented.
+      # Parse a legacy or v0 transaction message; v1 is not implemented.
       def self.parse(raw)
         cursor = Cursor.new(raw)
+        version = "legacy"
         first = cursor.peek
-        raise Transaction::UnsupportedVersionError, Transaction::LEGACY_UNSUPPORTED if (first & 0x80).zero?
+        if (first & 0x80) != 0
+          version = first & 0x7f
+          raise ArgumentError, "unsupported transaction version" unless version == 0
 
-        version = first & 0x7f
-        raise ArgumentError, "unsupported transaction version" unless version == 0
-
-        cursor.byte
+          cursor.byte
+        end
         header = {
           required_signatures: cursor.byte,
           readonly_signed: cursor.byte,
@@ -163,7 +156,12 @@ module PayCore
         account_keys = cursor.compact_u16.times.map { PublicKey.new(cursor.bytes(32)).to_s }
         recent_blockhash = Base58.encode(cursor.bytes(32))
         instructions = cursor.compact_u16.times.map { Instruction.parse(cursor) }
-        lookups = cursor.compact_u16.times.map { AddressLookup.parse(cursor) }
+        lookups = []
+        lookups = cursor.compact_u16.times.map { AddressLookup.parse(cursor) } if version == 0
+        # Canonical encoding only: what the signatures cover is exactly what
+        # re-serializes, so a message followed by stray bytes is malformed.
+        raise ArgumentError, "trailing bytes after transaction message" if cursor.offset < raw.bytesize
+
         new(
           raw: raw,
           version: version,

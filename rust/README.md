@@ -287,7 +287,8 @@ let signer = MemorySigner::from_bytes(&secret_key_bytes)?; // 64-byte keypair
 
 Set `fee_payer_signer` on `PayKitConfig` to sponsor the network fee — one key
 drives MPP fee-sponsored mode and supplies x402's fee-payer address. The
-`gcp_kms` feature wires the GCP KMS backend.
+`gcp_kms` feature wires the GCP KMS backend and `ledger` the Ledger USB-HID
+backend.
 
 ---
 
@@ -311,6 +312,7 @@ Feature flags:
 | `client` | — | client-side payment building for the enabled protocols |
 | `axum` | — | the `paid_get` / `paid_post` gate (implies `server` + both protocols) |
 | `gcp_kms` | — | GCP KMS signing backend |
+| `ledger` | — | Ledger hardware-wallet signing over USB-HID (`solana_keychain::ledger`; links hidapi) |
 
 ## Test
 

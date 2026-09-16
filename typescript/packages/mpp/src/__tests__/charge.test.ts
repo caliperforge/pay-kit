@@ -1626,7 +1626,7 @@ test('signature: throws on RPC error response', async () => {
 
 // ── Reported transaction version (type="signature") ──
 
-test('signature: rejects a legacy transaction reported by the RPC and leaves the signature unconsumed', async () => {
+test('signature: settles a legacy transaction reported by the RPC like a version-0 one', async () => {
     const method = charge({
         recipient: RECIPIENT,
         network: 'devnet',
@@ -1634,18 +1634,9 @@ test('signature: rejects a legacy transaction reported by the RPC and leaves the
         store,
     });
 
+    // A pre-cutover client's landed legacy transaction is policed as
+    // version 0 and settles.
     globalThis.fetch = async () => rpcSuccess({ ...solTransferTx(RECIPIENT, 1000000), version: 'legacy' });
-
-    await expect(
-        method.verify({
-            credential: signatureCredential(SIGNATURE, { amount: '1000000' }),
-            request: {} as any,
-        }),
-    ).rejects.toThrow('legacy transactions are not supported; use a version 0 or version 1 message');
-
-    // A rejected read-back must not burn the signature: the same signature
-    // settles once the RPC reports an accepted version.
-    globalThis.fetch = async () => rpcSuccess(solTransferTx(RECIPIENT, 1000000));
     const receipt = await method.verify({
         credential: signatureCredential(SIGNATURE, { amount: '1000000' }),
         request: {} as any,
@@ -1820,7 +1811,7 @@ test('pull: accepts valid native SOL transfer', async () => {
     expect(receipt.reference).toBe(transactionSignatureFromBase64(transaction));
 });
 
-test('pull: rejects a legacy transaction reported by the RPC after broadcast', async () => {
+test('pull: settles when the RPC reports the broadcast transaction as legacy', async () => {
     const method = charge({
         recipient: RECIPIENT,
         network: 'devnet',
@@ -1831,12 +1822,11 @@ test('pull: rejects a legacy transaction reported by the RPC after broadcast', a
     mockServerBroadcastFetch({ ...solTransferTx(RECIPIENT, 1000000), version: 'legacy' });
     const transaction = await buildSolPaymentTxBase64(RECIPIENT, 1000000);
 
-    await expect(
-        method.verify({
-            credential: transactionCredential(transaction, { amount: '1000000' }),
-            request: {} as any,
-        }),
-    ).rejects.toThrow('legacy transactions are not supported; use a version 0 or version 1 message');
+    const receipt = await method.verify({
+        credential: transactionCredential(transaction, { amount: '1000000' }),
+        request: {} as any,
+    });
+    expect(receipt.status).toBe('success');
 });
 
 test('pull: identical challenge-bound retry recovers the settled receipt', async () => {
@@ -3401,7 +3391,7 @@ test('#25 client-paid compute-unit price above the tight cap still passes (gener
     ).resolves.toBeUndefined();
 });
 
-test('verifyChargeTransaction rejects a legacy (unversioned) transaction', async () => {
+test('verifyChargeTransaction accepts a legacy (unversioned) transaction under the version-0 rules', async () => {
     const authority = await generateKeyPairSigner();
     const txMessage = pipe(
         createTransactionMessage({ version: 'legacy' }),
@@ -3421,7 +3411,7 @@ test('verifyChargeTransaction rejects a legacy (unversioned) transaction', async
             methodDetails: { network: 'devnet' },
             recipient: RECIPIENT,
         }),
-    ).rejects.toThrow('legacy transactions are not supported; use a version 0 or version 1 message');
+    ).resolves.toBeUndefined();
 });
 
 // #3 — post-timeout definitive status interpretation

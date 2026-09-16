@@ -12,13 +12,13 @@ use SolanaPhpSdk\Transaction\Message;
 use SolanaPhpSdk\Transaction\Transaction;
 
 /**
- * A legacy (unprefixed) Solana message is rejected at the x402 decode
- * boundary with the shared parse reject code and the project-wide reason
- * text, before any structural rule runs.
+ * A legacy (unprefixed) Solana message, as a pre-cutover client sends, passes
+ * the x402 decode boundary and is held to the same structural rules as a
+ * version-0 message.
  */
-final class LegacyTransactionRejectTest extends TestCase
+final class LegacyTransactionAcceptTest extends TestCase
 {
-    public function testLegacyMessageIsRejectedAtDecodeBoundary(): void
+    public function testLegacyMessageIsDecodedAndVerifiedStructurally(): void
     {
         $signer = Keypair::generate();
         $message = new Message(
@@ -36,10 +36,9 @@ final class LegacyTransactionRejectTest extends TestCase
             Verifier::verify($wire, $requirement, []);
             self::fail('expected InvalidProofException');
         } catch (InvalidProofException $e) {
-            self::assertSame(
-                'invalid_exact_svm_payload_transaction_parse: legacy transactions are not supported; use a version 0 or version 1 message',
-                $e->getMessage(),
-            );
+            // The decode boundary accepted the legacy wire: the first
+            // structural rule (instruction count) is what rejects it.
+            self::assertSame('invalid_exact_svm_payload_transaction_instructions_length', $e->getMessage());
         }
     }
 }

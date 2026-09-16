@@ -422,22 +422,18 @@ class X402Adapter:
 def _co_sign(transaction_b64: str, signer: Any) -> bytes:
     """Splice the facilitator signature into the fee-payer slot, return wire.
 
-    The signature covers ``to_bytes_versioned(msg)`` (0x80 prefix + v0 body).
-    The fee payer must occupy a signature slot. Legacy wires are rejected by
-    the shared :func:`require_versioned_wire` guard in
-    :mod:`solana_pay_kit._paycore.transaction` (same routing as the MPP charge
-    cosign) before ``solders`` sees the bytes.
+    The signature covers ``to_bytes_versioned(msg)``: the 0x80 prefix plus
+    the v0 body, or the bare legacy message. ``VersionedTransaction.from_bytes``
+    dispatches on the prefix, so a pre-cutover client's legacy wire is
+    co-signed like a v0 one. The fee payer must occupy a signature slot.
     """
     from solders.message import to_bytes_versioned
     from solders.pubkey import Pubkey
     from solders.transaction import VersionedTransaction
 
-    from solana_pay_kit._paycore.transaction import require_versioned_wire
-
     raw = base64.b64decode(transaction_b64)
     fee_payer_pubkey = Pubkey.from_string(signer.pubkey())
 
-    require_versioned_wire(raw, error=_transaction_parse_error)
     try:
         vtx = VersionedTransaction.from_bytes(raw)
     except Exception as exc:  # noqa: BLE001
@@ -472,9 +468,6 @@ def _transaction_signature(transaction_wire: bytes) -> str:
     """Return the deterministic first signature from a signed wire transaction."""
     from solders.transaction import VersionedTransaction
 
-    from solana_pay_kit._paycore.transaction import require_versioned_wire
-
-    require_versioned_wire(transaction_wire, error=_transaction_parse_error)
     try:
         signatures = VersionedTransaction.from_bytes(transaction_wire).signatures
     except Exception as exc:  # noqa: BLE001

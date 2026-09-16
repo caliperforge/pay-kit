@@ -43,9 +43,16 @@ const (
 	openFixtureOpenSlot = uint64(321_654_987)
 )
 
-// buildOpenTxFixture builds a payer-signed open transaction in the requested
-// encoding (clients across the language SDKs emit either).
+// buildOpenTxFixture builds a payer-signed v0 open transaction, the encoding
+// every pay-kit client emits.
 func buildOpenTxFixture(t *testing.T) openTxFixture {
+	return buildOpenTxFixtureWithEncoding(t, false)
+}
+
+// buildOpenTxFixtureWithEncoding builds a payer-signed open transaction as a
+// legacy (unprefixed) or v0 message. Legacy is what a pre-cutover client
+// sends; servers keep accepting it.
+func buildOpenTxFixtureWithEncoding(t *testing.T, legacy bool) openTxFixture {
 	t.Helper()
 
 	payer := testutil.NewPrivateKey()
@@ -82,7 +89,7 @@ func buildOpenTxFixture(t *testing.T) openTxFixture {
 		mint:       mint,
 		channel:    channel,
 	}
-	fixture.signature, fixture.payload = signAndAttachOpenTx(t, &fixture, ix)
+	fixture.signature, fixture.payload = signAndAttachOpenTxEncoded(t, &fixture, ix, legacy)
 	fixture.expected = VerifyOpenTxExpected{
 		AuthorizedSigner: authorized.String(),
 		Currency:         "USDC",
@@ -98,11 +105,23 @@ func buildOpenTxFixture(t *testing.T) openTxFixture {
 // transaction for ix, returning the fee-payer signature and the open payload
 // carrying the wire transaction.
 func signAndAttachOpenTx(t *testing.T, fixture *openTxFixture, ix solana.Instruction) (string, intents.OpenPayload) {
+	return signAndAttachOpenTxEncoded(t, fixture, ix, false)
+}
+
+// signAndAttachOpenTxEncoded is signAndAttachOpenTx with a choice of message
+// encoding: legacy (unprefixed) or v0.
+func signAndAttachOpenTxEncoded(t *testing.T, fixture *openTxFixture, ix solana.Instruction, legacy bool) (string, intents.OpenPayload) {
 	t.Helper()
 	blockhash := solana.MustHashFromBase58("EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N")
-	tx, err := solanatx.NewV0Transaction([]solana.Instruction{ix}, blockhash, solana.TransactionPayer(fixture.payer.PublicKey()))
+	var tx *solana.Transaction
+	var err error
+	if legacy {
+		tx, err = solana.NewTransaction([]solana.Instruction{ix}, blockhash, solana.TransactionPayer(fixture.payer.PublicKey()))
+	} else {
+		tx, err = solanatx.NewV0Transaction([]solana.Instruction{ix}, blockhash, solana.TransactionPayer(fixture.payer.PublicKey()))
+	}
 	if err != nil {
-		t.Fatalf("NewV0Transaction: %v", err)
+		t.Fatalf("build open transaction: %v", err)
 	}
 	if _, err := tx.Sign(func(key solana.PublicKey) *solana.PrivateKey {
 		if key.Equals(fixture.payer.PublicKey()) {
@@ -135,24 +154,27 @@ func signAndAttachOpenTx(t *testing.T, fixture *openTxFixture, ix solana.Instruc
 
 // ── VerifyOpenTx: accepted encodings ──
 
-func TestVerifyOpenTxRejectsLegacyEncoding(t *testing.T) {
-	// Re-encode the otherwise-valid v0 fixture as a legacy (unversioned)
-	// message: the shared decoder must reject it before any account check.
-	fixture := buildOpenTxFixture(t)
-	tx, err := solanatx.DecodeTransactionBase64(*fixture.payload.Transaction)
+func TestVerifyOpenTxAcceptsLegacyEncoding(t *testing.T) {
+	// A pre-cutover client's legacy (unprefixed) open is still accepted and
+	// verified under the same rules as a v0 message.
+	fixture := buildOpenTxFixtureWithEncoding(t, true)
+	decoded, err := solanatx.DecodeTransactionBase64(*fixture.payload.Transaction)
 	if err != nil {
-		t.Fatalf("decode v0 fixture: %v", err)
+		t.Fatalf("decode legacy fixture: %v", err)
 	}
-	tx.Message.SetVersion(solana.MessageVersionLegacy)
-	encoded, err := solanatx.EncodeTransactionBase64(tx)
-	if err != nil {
-		t.Fatalf("re-encode legacy tx: %v", err)
+	if decoded.Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("fixture message version = %v, want legacy", decoded.Message.GetVersion())
 	}
-	fixture.payload.Transaction = &encoded
 
-	_, err = VerifyOpenTx(context.Background(), fixture.expected, &fixture.payload, nil)
-	if err == nil || err.Error() != solanatx.ErrLegacyTransaction.Error() {
-		t.Fatalf("err = %v, want %q", err, solanatx.ErrLegacyTransaction)
+	result, err := VerifyOpenTx(context.Background(), fixture.expected, &fixture.payload, nil)
+	if err != nil {
+		t.Fatalf("VerifyOpenTx: %v", err)
+	}
+	if result.ChannelID != fixture.channel.String() {
+		t.Fatalf("channelId = %s, want %s", result.ChannelID, fixture.channel)
+	}
+	if result.Deposit != openFixtureDeposit || result.GracePeriod != openFixtureGrace || result.Salt != openFixtureSalt {
+		t.Fatalf("result = %+v, want deposit/grace/salt %d/%d/%d", result, openFixtureDeposit, openFixtureGrace, openFixtureSalt)
 	}
 }
 

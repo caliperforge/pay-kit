@@ -24,6 +24,10 @@ client = ["dep:reqwest"]
 # plus the server side.
 axum = ["mpp", "x402", "server", "dep:axum"]
 gcp_kms = ["solana-keychain/gcp_kms"]
+# Ledger hardware-wallet signing over USB-HID, forwarded from solana-keychain
+# (`pay_kit::solana_keychain::ledger`). Opt-in: it links hidapi, which needs
+# libusb/udev on Linux, so it stays out of every default and `all` build.
+ledger = ["solana-keychain/ledger"]
 # Durable server-side session state. Opt-in so clients and local-only servers
 # do not pull a Redis runtime into their dependency graph.
 redis-store = ["dep:redis"]

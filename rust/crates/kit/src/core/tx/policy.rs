@@ -174,20 +174,16 @@ pub fn check_envelope(tx: &VersionedTransaction, accepted: &[TxVersion]) -> Resu
 /// Version policy for a transaction read back from the RPC by signature.
 /// `maxSupportedTransactionVersion` only bounds what the node returns; the
 /// server still accepts only its configured versions, exactly as for a
-/// transaction credential. Legacy is refused, and so is a missing version:
-/// nodes report one for every versioned transaction once asked.
+/// transaction credential. A reported `legacy` is policed as version 0 (see
+/// [`TxVersion::of`]); a missing version is refused, since nodes report one
+/// for every transaction once asked.
 pub fn check_reported_version(
     reported: Option<&TransactionVersion>,
     accepted: &[TxVersion],
 ) -> Result<TxVersion> {
     let version = match reported {
         Some(TransactionVersion::Number(n)) => TxVersion::try_from(*n).map_err(Error::Other)?,
-        Some(TransactionVersion::Legacy(_)) => {
-            return Err(Error::Other(
-                "legacy transactions are not supported; use a version 0 or version 1 message"
-                    .into(),
-            ))
-        }
+        Some(TransactionVersion::Legacy(_)) => TxVersion::V0,
         None => {
             return Err(Error::Other(
                 "RPC did not report the transaction version".into(),
@@ -243,10 +239,18 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("version 1 is not accepted"), "{err}");
-        assert!(
+        // A reported legacy message is policed as version 0: accepted exactly
+        // when version 0 is, refused when only version 1 is accepted.
+        assert_eq!(
             check_reported_version(Some(&TransactionVersion::Legacy(Legacy::Legacy)), &both)
-                .is_err()
+                .unwrap(),
+            TxVersion::V0
         );
+        assert!(check_reported_version(
+            Some(&TransactionVersion::Legacy(Legacy::Legacy)),
+            &[TxVersion::V1]
+        )
+        .is_err());
         assert!(check_reported_version(None, &both).is_err());
         assert!(check_reported_version(Some(&TransactionVersion::Number(7)), &both).is_err());
     }

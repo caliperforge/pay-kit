@@ -1326,10 +1326,11 @@ func TestUptoVerifyOpenRejectsWrongPayer(t *testing.T) {
 	}
 }
 
-// TestUptoVerifyOpenRejectsLegacyOpenTransaction pins the shared decode
+// TestUptoVerifyOpenAcceptsLegacyOpenTransaction pins the shared decode
 // boundary: an otherwise-valid open transaction encoded as a legacy
-// (unversioned) message is rejected before any instruction or RPC check.
-func TestUptoVerifyOpenRejectsLegacyOpenTransaction(t *testing.T) {
+// (unprefixed) message, as a pre-cutover client sends, is verified under the
+// same rules as a v0 message and broadcast.
+func TestUptoVerifyOpenAcceptsLegacyOpenTransaction(t *testing.T) {
 	operatorKey := testutil.NewPrivateKey()
 	payerKey := testutil.NewPrivateKey()
 	payee := operatorKey.PublicKey()
@@ -1342,26 +1343,60 @@ func TestUptoVerifyOpenRejectsLegacyOpenTransaction(t *testing.T) {
 		TokenProgram: solana.TokenProgramID, ProgramID: paymentchannels.ProgramPubkey(),
 	}
 	openIx, _ := paymentchannels.BuildOpenInstruction(params)
-	tx, _ := solanatx.NewV0Transaction([]solana.Instruction{openIx}, solana.MustHashFromBase58("4vJ9JU1bJJbzZ4aJ8AqGxH9bK5VwY8bGf3sD5QG6h7h"), solana.TransactionPayer(operatorKey.PublicKey()))
-	solanatx.SignTransaction(tx, payerSigner{payerKey})
-	tx.Message.SetVersion(solana.MessageVersionLegacy)
+	blockhash := solana.MustHashFromBase58("4vJ9JU1bJJbzZ4aJ8AqGxH9bK5VwY8bGf3sD5QG6h7h")
+	// solana.NewTransaction builds a legacy (unprefixed) message.
+	tx, err := solana.NewTransaction([]solana.Instruction{openIx}, blockhash, solana.TransactionPayer(operatorKey.PublicKey()))
+	if err != nil {
+		t.Fatalf("NewTransaction: %v", err)
+	}
+	if tx.Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("fixture version = %v, want legacy", tx.Message.GetVersion())
+	}
+	if err := solanatx.SignTransaction(tx, payerSigner{payerKey}); err != nil {
+		t.Fatalf("SignTransaction: %v", err)
+	}
 	txBase64, _ := solanatx.EncodeTransactionBase64(tx)
-	engine, _ := NewX402Upto(UptoConfig{
+
+	fakeRPC := newUptoTestRPC()
+	fakeRPC.addChannel(channel, &pcgen.Channel{
+		Discriminator:    uint8(pcgen.AccountDiscriminator_Channel),
+		Status:           uint8(pcgen.ChannelStatus_Open),
+		Salt:             salt,
+		Deposit:          1_000_000,
+		GracePeriod:      900,
+		DistributionHash: distributionHash(singleSplitTo(payee)),
+		Payer:            payerKey.PublicKey(),
+		Payee:            payee,
+		AuthorizedSigner: operatorKey.PublicKey(),
+		RentPayer:        operatorKey.PublicKey(),
+		Mint:             mint,
+	})
+	engine, err := NewX402Upto(UptoConfig{
 		Recipient: payee.String(), Currency: "USDC", Decimals: 6, Network: paykit.SolanaLocalnet,
+		RPCURL: "http://localhost:8899", MaxTimeoutSeconds: 300,
 		FeePayerSigner:          signerSigner{operatorKey},
-		RecentBlockhashProvider: func() (string, error) { return "4vJ9JU1bJJbzZ4aJ8AqGxH9bK5VwY8bGf3sD5QG6h7h", nil },
+		RecentBlockhashProvider: func() (string, error) { return blockhash.String(), nil },
 		RecentSlotProvider:      func() (uint64, error) { return 55_555, nil },
 	})
-	engine.SetRPCForTests(newUptoTestRPC())
+	if err != nil {
+		t.Fatalf("NewX402Upto: %v", err)
+	}
+	engine.SetRPCForTests(fakeRPC)
 	env := UptoSignatureEnvelope{X402Version: X402Version, Scheme: UptoScheme, Network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", Payload: UptoPayload{
 		From: payerKey.PublicKey().String(), MaxAmount: "1000000",
 		ExpiresAt: time.Now().Add(time.Hour).Unix(), ChannelID: channel.String(), Deposit: "1000000",
 		Nonce: "7", OpenSlot: "55555", AuthorizedSigner: operatorKey.PublicKey().String(), OpenTransaction: txBase64,
 	}}
 	raw, _ := json.Marshal(env)
-	_, err := engine.VerifyOpen(context.Background(), base64.StdEncoding.EncodeToString(raw), "1.00")
-	if err == nil || err.Error() != solanatx.ErrLegacyTransaction.Error() {
-		t.Fatalf("err = %v, want %q", err, solanatx.ErrLegacyTransaction)
+	verified, err := engine.VerifyOpen(context.Background(), base64.StdEncoding.EncodeToString(raw), "1.00")
+	if err != nil {
+		t.Fatalf("VerifyOpen: %v", err)
+	}
+	if !verified.ChannelID.Equals(channel) {
+		t.Fatalf("channelID = %s, want %s", verified.ChannelID, channel)
+	}
+	if len(fakeRPC.Sent) != 1 || fakeRPC.Sent[0].Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("sent = %d transactions, want the legacy open broadcast as-is", len(fakeRPC.Sent))
 	}
 }
 

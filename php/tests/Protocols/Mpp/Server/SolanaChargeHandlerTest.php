@@ -186,8 +186,10 @@ final class SolanaChargeHandlerTest extends TestCase
         self::assertStringContainsString('devnet', $result->body['detail']);
     }
 
-    public function testReturns402WhenTransactionIsLegacy(): void
+    public function testSettlesALegacyTransactionLikeVersionZero(): void
     {
+        // A pre-cutover client's legacy (unprefixed) wire is co-signed and
+        // broadcast in its original framing, exactly like a v0 one.
         $challenges = new ChargeServer(secretKey: 'test-secret-0123456789abcdef-0123456789', realm: 'api');
         $request = $this->chargeRequest();
         $challenge = $challenges->createChallenge($request);
@@ -196,20 +198,29 @@ final class SolanaChargeHandlerTest extends TestCase
             payload: ['type' => 'transaction', 'transaction' => $this->minimalLegacyTransactionBase64()],
         );
 
-        // AlwaysAcceptVerifier so the settle path's own decode boundary is
-        // what rejects the wire, before any RPC call is attempted.
+        $http = new FakeJsonRpcHttpClient([
+            'sendTransaction' => [['result' => 'LegacySignatureFixtureValue']],
+            'getSignatureStatuses' => [[
+                'result' => [
+                    'value' => [[
+                        'slot' => 1,
+                        'confirmationStatus' => 'confirmed',
+                        'err' => null,
+                    ]],
+                ],
+            ]],
+        ]);
         $handler = $this->handler(
             challenges: $challenges,
+            rpc: new RpcClient('http://test.invalid', $http),
             verifier: new AlwaysAcceptVerifier(),
         );
 
         $result = $handler->handle($credential->toAuthorizationHeader(), $request);
 
-        self::assertInstanceOf(PaymentRequiredResponse::class, $result);
-        self::assertSame(
-            'legacy transactions are not supported; use a version 0 or version 1 message',
-            $result->body['detail'],
-        );
+        self::assertInstanceOf(ChargeSettlement::class, $result);
+        self::assertSame(200, $result->status);
+        self::assertSame('LegacySignatureFixtureValue', $result->signature);
     }
 
     public function testReturns402WhenBroadcastReportsOnChainFailure(): void
@@ -640,8 +651,8 @@ final class SolanaChargeHandlerTest extends TestCase
     }
 
     /**
-     * Builds a signed v0 transaction with no instructions: the only client
-     * wire the server accepts. The handler re-serializes the transaction with
+     * Builds a signed v0 transaction with no instructions, the wire every
+     * pay-kit client emits. The handler re-serializes the transaction with
      * `verifySignatures = true` before broadcasting, so the fixture must carry
      * a real signature in the only required slot.
      */
@@ -661,8 +672,8 @@ final class SolanaChargeHandlerTest extends TestCase
     }
 
     /**
-     * Builds a signed legacy (unprefixed) transaction. Only used to assert
-     * the handler rejects it at the decode boundary.
+     * Builds a signed legacy (unprefixed) transaction, as a pre-cutover
+     * client sends; the handler still accepts it.
      */
     private function minimalLegacyTransactionBase64(): string
     {

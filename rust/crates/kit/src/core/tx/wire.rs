@@ -29,8 +29,8 @@ pub fn encode(tx: &VersionedTransaction) -> Result<String> {
 }
 
 /// Decode a base64 payload transaction. The version byte selects the layout,
-/// so both supported versions decode here; a legacy message decodes but is
-/// rejected, since the kit does not accept it.
+/// so version 0, version 1 and legacy (unprefixed, policed as version 0)
+/// messages all decode here.
 pub fn decode(b64: &str) -> Result<VersionedTransaction> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
@@ -110,15 +110,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_payloads_are_rejected() {
+    fn legacy_payloads_decode_and_round_trip() {
         let payer = Pubkey::new_unique();
         let tx = unsigned(VersionedMessage::Legacy(Message::new(
             &[transfer(&payer)],
             Some(&payer),
         )));
-        let b64 =
-            base64::engine::general_purpose::STANDARD.encode(bincode::serialize(&tx).unwrap());
-        assert!(decode(&b64).unwrap_err().to_string().contains("legacy"));
+        let bytes = bincode::serialize(&tx).unwrap();
+        assert_eq!(
+            bytes[64 + 1] & 0x80,
+            0,
+            "legacy messages carry no version prefix"
+        );
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let decoded = decode(&b64).unwrap();
+        assert_eq!(decoded, tx);
+        assert_eq!(serialize(&decoded).unwrap(), bytes);
     }
 
     #[test]

@@ -5,7 +5,6 @@ import {
     getTransactionDecoder,
     isTransactionPartialSigner,
     type TransactionPartialSigner,
-    type TransactionVersion,
 } from '@solana/kit';
 import { findAssociatedTokenPda } from '@solana-program/token';
 import { Method, Receipt, Store } from 'mppx';
@@ -26,7 +25,6 @@ import {
 import * as Methods from '../Methods.js';
 import {
     assertReportedTransactionVersion,
-    assertVersionedTransactionMessage,
     coSignBase64Transaction,
     transactionSignatureFromBase64,
 } from '../utils/transactions.js';
@@ -307,7 +305,6 @@ function extractRecentBlockhash(clientTxBase64: string): string | null {
         const txBytes = getBase64Codec().encode(clientTxBase64);
         const decoded = getTransactionDecoder().decode(txBytes);
         const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
-        assertVersionedTransactionMessage(message);
         return message.lifetimeToken;
     } catch {
         return null;
@@ -328,7 +325,6 @@ type CompiledMessage = {
     addressTableLookups?: readonly unknown[];
     instructions: readonly CompiledInstruction[];
     staticAccounts: readonly string[];
-    version: TransactionVersion;
 };
 
 type CompiledInstruction = {
@@ -357,8 +353,9 @@ export async function verifyChargeTransaction(clientTxBase64: string, challenge:
     } catch (e) {
         throw new Error(`Invalid transaction: ${e instanceof Error ? e.message : String(e)}`);
     }
-    assertVersionedTransactionMessage(message);
 
+    // Legacy and v0 messages both decode to this shape; a legacy message is
+    // verified under the same rules as v0 (it cannot carry lookup tables).
     if (message.addressTableLookups?.length) {
         throw new Error('v0 transactions with address lookup tables are not supported');
     }

@@ -16,7 +16,6 @@ package server
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -97,10 +96,11 @@ type VerifyOpenTxResult struct {
 // VerifyOpenTx decodes and validates a client-submitted payment-channel open
 // transaction against the session challenge.
 //
-// Only version 0 transactions are accepted: a legacy message is rejected by
-// the shared decoder, and a v0 transaction that uses address lookup tables is
-// rejected because the account checks below read the static account keys,
-// so an ALT could hide the real accounts behind the fee-payer co-sign guard.
+// Both legacy and v0 transaction encodings are accepted (clients never build
+// legacy any more, but existing ones still may), while a v0 transaction that
+// uses address lookup tables is rejected because the account checks below
+// read the static account keys, so an ALT could hide the real accounts
+// behind the fee-payer co-sign guard.
 // The embedded open
 // instruction must target the configured payment-channels program, the payee
 // must equal the challenge recipient, the mint must match the challenge
@@ -507,15 +507,11 @@ func SubmitOpenTx(ctx context.Context, expected VerifyOpenTxExpected, payload *i
 	return SubmitOpenTxResult{VerifyOpenTxResult: verified, Signature: signature.String()}, nil
 }
 
-// decodeOpenTransaction decodes a client-submitted open transaction. The
-// legacy-message rejection is surfaced verbatim so every server path reports
-// the same text; other decode failures name the open transaction.
+// decodeOpenTransaction decodes a client-submitted open transaction through
+// the shared version policy; decode failures name the open transaction.
 func decodeOpenTransaction(encoded string) (*solana.Transaction, error) {
 	tx, err := solanatx.DecodeTransactionBase64(encoded)
 	if err != nil {
-		if errors.Is(err, solanatx.ErrLegacyTransaction) {
-			return nil, err
-		}
 		return nil, fmt.Errorf("decode open transaction: %w", err)
 	}
 	return tx, nil

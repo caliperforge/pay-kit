@@ -75,15 +75,15 @@ module RubyMppTestHelpers
   end
 
   # Build a v0 transaction wire (0x80 version prefix, empty address-table
-  # lookup vector). This is the only client wire the server accepts.
+  # lookup vector): the wire every pay-kit client emits.
   def v0_transaction(account_keys:, instructions:, recent_blockhash: pubkey(9), signatures: nil)
     sigs = signatures || ["\x00".b * 64]
     message = [0x80].pack("C") + message_body(account_keys, instructions, recent_blockhash, sigs.length) + compact_u16(0)
     compact_u16(sigs.length) + sigs.join + message
   end
 
-  # Build a legacy (unprefixed) transaction wire. Only used to assert the
-  # server rejects it.
+  # Build a legacy (unprefixed) transaction wire, as a pre-cutover client
+  # sends; servers still accept it.
   def legacy_transaction(account_keys:, instructions:, recent_blockhash: pubkey(9), signatures: nil)
     sigs = signatures || ["\x00".b * 64]
     compact_u16(sigs.length) + sigs.join + message_body(account_keys, instructions, recent_blockhash, sigs.length)

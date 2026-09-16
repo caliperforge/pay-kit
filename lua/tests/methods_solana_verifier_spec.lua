@@ -45,15 +45,15 @@ local function message_body(account_key_bytes, blockhash, instructions_wire, req
 end
 
 -- Build a v0 transaction message (0x80 prefix, empty address-table lookup
--- vector): the only client wire the verifier accepts.
+-- vector): the wire every pay-kit client emits.
 local function build_message(account_key_bytes, blockhash, instructions_wire, required_signatures)
   return string.char(0x80)
     .. message_body(account_key_bytes, blockhash, instructions_wire, required_signatures)
     .. transaction.compact_u16(0)
 end
 
--- Build a legacy (unprefixed) transaction message. Only used to assert the
--- verifier rejects it.
+-- Build a legacy (unprefixed) transaction message, as a pre-cutover client
+-- sends; the verifier still accepts it under the v0 rules.
 local function build_legacy_message(account_key_bytes, blockhash, instructions_wire, required_signatures)
   return message_body(account_key_bytes, blockhash, instructions_wire, required_signatures)
 end
@@ -166,7 +166,7 @@ helper.test('verifier accepts a SOL transfer to the recipient', function()
   })
 end)
 
-helper.test('verifier rejects a legacy transaction at the decode boundary', function()
+helper.test('verifier accepts a legacy transaction under the v0 rules', function()
   local payer_bytes = string.rep('\x01', 32)
   local recipient_bytes = string.rep('\x03', 32)
   local recipient_pub = base58.encode(recipient_bytes)
@@ -174,12 +174,9 @@ helper.test('verifier rejects a legacy transaction at the decode boundary', func
   local message = build_legacy_message(
     { payer_bytes, recipient_bytes, SYSTEM_PROGRAM_BYTES }, string.rep('\xc3', 32), { ix }, 1)
   local raw = transaction.compact_u16(1) .. string.rep('\0', 64) .. message
-  local ok, err = pcall(verifier.verify_transaction_base64,
+  verifier.verify_transaction_base64(
     require('pay_kit.util.base64_std').encode(raw),
     { amount = '1000', currency = 'SOL', recipient = recipient_pub, methodDetails = {} })
-  helper.assert_true(not ok, 'legacy wire must be rejected')
-  helper.assert_equal(tostring(err),
-    'legacy transactions are not supported; use a version 0 or version 1 message')
 end)
 
 helper.test('verifier rejects v0 address-table lookups', function()

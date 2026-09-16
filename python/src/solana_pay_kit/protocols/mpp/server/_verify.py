@@ -25,7 +25,6 @@ from solana_pay_kit._paycore.solana import (
     is_native_sol,
     resolve_mint,
 )
-from solana_pay_kit._paycore.transaction import require_versioned_wire
 from solana_pay_kit.protocols.mpp.intents.charge import ChargeRequest
 from solana_pay_kit.protocols.mpp.server._tx_decode import (
     _COMPUTE_BUDGET_PROGRAM,
@@ -36,7 +35,6 @@ from solana_pay_kit.protocols.mpp.server._tx_decode import (
     _build_expected_transfers,
     _decode_legacy_payment_instructions,
     _expected_memos,
-    _invalid_payload_type,
     _validate_compute_budget_instruction,
     _verify_ata_owner,
     _verify_parsed_memo_instructions,
@@ -49,10 +47,10 @@ def _co_sign_with_fee_payer(transaction_b64: str, fee_payer: Any) -> str:
     """Co-sign a client transaction with the server's fee payer keypair.
 
     The fee payer occupies the first signer slot in Solana transactions. We
-    sign ``to_bytes_versioned(msg)`` (the ``0x80`` version tag plus the v0
-    body, exactly what the wire carries) with the fee-payer private key and
-    splice the resulting signature into the signature array at the slot
-    matching the fee-payer pubkey. Legacy wires are rejected up-front.
+    sign ``to_bytes_versioned(msg)`` (exactly what the wire carries: the
+    ``0x80`` version tag plus the v0 body, or the bare legacy message) with
+    the fee-payer private key and splice the resulting signature into the
+    signature array at the slot matching the fee-payer pubkey.
 
     Mirrors the cosign step in rust/src/server/charge.rs verify_pull.
     """
@@ -62,7 +60,6 @@ def _co_sign_with_fee_payer(transaction_b64: str, fee_payer: Any) -> str:
     raw = base64.b64decode(transaction_b64)
     fee_payer_pubkey = fee_payer.pubkey()
 
-    require_versioned_wire(raw, error=_invalid_payload_type)
     try:
         vtx = VersionedTransaction.from_bytes(raw)
     except Exception as exc:
@@ -305,7 +302,6 @@ def _validate_instruction_allowlist(
     from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64)
-    require_versioned_wire(raw, error=_invalid_payload_type)
     try:
         vtx = VersionedTransaction.from_bytes(raw)
     except Exception as exc:

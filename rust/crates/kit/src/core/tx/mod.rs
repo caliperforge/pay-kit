@@ -2,9 +2,9 @@
 //! encoding, and the envelope checks every verifier runs first.
 //!
 //! The kit builds and accepts two Solana message versions, `0` and `1`
-//! (SIMD-0385). Legacy messages are not built and not accepted: version 0
-//! without address lookup tables is a strict superset, and rejecting legacy
-//! removes the legacy-first decode ambiguity from every verifier. Address
+//! (SIMD-0385). Legacy messages are never built or advertised, but servers
+//! keep accepting them from existing clients and police them as version 0
+//! (same limits, ComputeBudget instructions in the body). Address
 //! lookup tables are never used either; every account is a static key, so a
 //! sponsor sees exactly what it co-signs.
 //!

@@ -19,7 +19,6 @@ use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
 use SolanaPhpSdk\Keypair\Keypair;
 use SolanaPhpSdk\Rpc\RpcClient;
-use PayKit\Exception\LegacyTransactionException;
 use PayKit\PayCore\Solana\TransactionWire;
 use Throwable;
 
@@ -299,8 +298,6 @@ final class Adapter
         }
         try {
             $tx = TransactionWire::deserialize($rawTx);
-        } catch (LegacyTransactionException $e) {
-            throw new InvalidProofException('invalid_exact_svm_payload_transaction_parse: ' . $e->getMessage());
         } catch (Throwable) {
             throw new InvalidProofException('invalid_exact_svm_payload_transaction_parse');
         }

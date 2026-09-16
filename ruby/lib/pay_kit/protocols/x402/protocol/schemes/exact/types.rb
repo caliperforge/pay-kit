@@ -125,14 +125,23 @@ module PayKit::Protocols::X402
           parse_versioned_message(message)
         end
 
-        def parse_versioned_message(message)
+        # Offset of the message header: 0 for a legacy (unprefixed) message,
+        # 1 past the 0x80 prefix for v0. Clients only build v0; a pre-cutover
+        # client's legacy message is still accepted and held to the v0 rules.
+        def message_header_offset(message)
           first = message.getbyte(0)
           raise "expected versioned transaction message" if first.nil?
-          raise TransactionCodec::LEGACY_UNSUPPORTED if (first & 0x80).zero?
+          return 0 if (first & 0x80).zero?
           raise "expected versioned transaction message" unless first == 0x80
-          raise "transaction message header extends beyond input" if message.bytesize < 4
 
-          account_count, offset = read_short_vec(message, 4)
+          1
+        end
+
+        def parse_versioned_message(message)
+          header = message_header_offset(message)
+          raise "transaction message header extends beyond input" if message.bytesize < header + 3
+
+          account_count, offset = read_short_vec(message, header + 3)
           account_keys = account_count.times.map do |index|
             start = offset + (index * 32)
             raise "message account key extends beyond input" if start + 32 > message.bytesize
@@ -333,10 +342,9 @@ module PayKit::Protocols::X402
         end
 
         def required_signer_index(message, public_key)
-          raise ArgumentError, "expected versioned transaction message" unless message.getbyte(0) == 0x80
-
-          required_signatures = message.getbyte(1)
-          account_count, account_offset = read_short_vec(message, 4)
+          header = message_header_offset(message)
+          required_signatures = message.getbyte(header)
+          account_count, account_offset = read_short_vec(message, header + 3)
           keys = account_count.times.map do |index|
             start = account_offset + (index * 32)
             raise ArgumentError, "message account key extends beyond input" if start + 32 > message.bytesize

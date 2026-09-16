@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	solana "github.com/gagliardetto/solana-go"
@@ -550,7 +551,9 @@ func TestVerifyAndSettleRejectsUndecodableTransaction(t *testing.T) {
 	}
 }
 
-func TestVerifyAndSettleRejectsLegacyTransaction(t *testing.T) {
+// A legacy (unprefixed) transaction passes the decode boundary: the adapter
+// only rejects it later, on its content, exactly like a version-0 message.
+func TestVerifyAndSettleDecodesLegacyTransaction(t *testing.T) {
 	op := signer.Generate()
 	a := &Adapter{
 		cfg:    paykit.Config{Network: paykit.SolanaLocalnet, Stablecoins: []paykit.Stablecoin{paykit.USDC}, Operator: paykit.Operator{Signer: op, Recipient: op.Pubkey()}, X402: paykit.X402Config{Scheme: "exact"}},
@@ -574,12 +577,11 @@ func TestVerifyAndSettleRejectsLegacyTransaction(t *testing.T) {
 	credJSON, _ := json.Marshal(cred)
 	gate := paykit.Gate{Amount: paykit.MustParseUSD("0.001")}
 	_, err = a.VerifyAndSettle(&paykit.AdapterRequest{Gate: &gate, PaymentSig: base64.StdEncoding.EncodeToString(credJSON)})
-	var perr *paykit.PaymentError
-	if !errorsAs(err, &perr) || perr.Code != "invalid_payload" {
-		t.Fatalf("expected invalid_payload, got %v", err)
+	if err == nil {
+		t.Fatal("a memo-only payment must still be rejected on its content")
 	}
-	if perr.Err == nil || perr.Err.Error() != solanatx.ErrLegacyTransaction.Error() {
-		t.Fatalf("err = %v, want %q", perr.Err, solanatx.ErrLegacyTransaction)
+	if strings.Contains(err.Error(), "transaction decode") || strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("legacy message was rejected at the decode boundary: %v", err)
 	}
 }
 

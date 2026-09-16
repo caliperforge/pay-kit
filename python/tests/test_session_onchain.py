@@ -15,7 +15,6 @@ from solders.transaction import Transaction, VersionedTransaction  # type: ignor
 
 from solana_pay_kit._paycore.errors import PaymentError
 from solana_pay_kit._paycore.solana import TOKEN_PROGRAM
-from solana_pay_kit._paycore.transaction import LEGACY_TRANSACTION_REJECTED
 from solana_pay_kit.protocols.mpp._paymentchannels import (
     PROGRAM_ID,
     OpenChannelParams,
@@ -46,7 +45,8 @@ class _Fixture:
 
 
 def _fixture(*, legacy: bool = False) -> _Fixture:
-    """Build an open payload; ``legacy=True`` compiles the rejected unversioned wire."""
+    """Build an open payload; ``legacy=True`` compiles the unversioned wire a
+    pre-cutover client sends, which servers still accept."""
     payer = Keypair.from_seed(bytes([1] * 32))
     payee = Keypair.from_seed(bytes([2] * 32)).pubkey()
     authorized = Keypair.from_seed(bytes([3] * 32)).pubkey()
@@ -115,20 +115,13 @@ def _context(recent_blockhash: str | None = None, recent_slot: int = 42) -> Sess
     )
 
 
-async def test_verify_open_tx_accepts_exact_v0() -> None:
-    fixture = _fixture()
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_verify_open_tx_accepts_exact_legacy_and_v0(legacy: bool) -> None:
+    fixture = _fixture(legacy=legacy)
     result = await verify_open_tx(fixture.expected, fixture.payload, None)
     assert result.channel_id == fixture.payload.channel_id
     assert result.deposit == 1_000
     assert result.open_slot == 42
-
-
-async def test_verify_open_tx_rejects_legacy_transaction() -> None:
-    fixture = _fixture(legacy=True)
-    with pytest.raises(PaymentError) as exc:
-        await verify_open_tx(fixture.expected, fixture.payload, None)
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-    assert exc.value.code == "invalid-payload"
 
 
 @pytest.mark.parametrize(
@@ -156,11 +149,12 @@ async def test_verify_open_tx_rejects_challenge_policy_mismatch() -> None:
         await verify_open_tx(fixture.expected, fixture.payload, None)
 
 
-async def test_verify_open_tx_rejects_wrong_challenged_blockhash() -> None:
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_verify_open_tx_rejects_wrong_challenged_blockhash(legacy: bool) -> None:
     # The fixture transaction compiles against Hash.default(); a challenge
     # that advertised a different recentBlockhash means the transaction was
     # not built for this challenge — rejected before broadcast.
-    fixture = _fixture()
+    fixture = _fixture(legacy=legacy)
     fixture.expected.recent_blockhash = str(Hash.new_unique())
     with pytest.raises(PaymentError, match="challenged recentBlockhash"):
         await verify_open_tx(fixture.expected, fixture.payload, None)

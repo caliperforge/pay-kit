@@ -22,18 +22,34 @@ class TransactionTest < Minitest::Test
     assert_match(/\A[1-9A-HJ-NP-Za-km-z]+\z/, tx.primary_signature)
   end
 
-  def test_rejects_legacy_transaction
+  def test_parses_and_serializes_legacy_transaction
+    payer = pubkey(1)
+    recipient = pubkey(2)
     raw = legacy_transaction(
-      account_keys: [pubkey(1), pubkey(2), PROGRAMS::SYSTEM_PROGRAM],
+      account_keys: [payer, recipient, PROGRAMS::SYSTEM_PROGRAM],
       instructions: [compiled_instruction(2, [0, 1], u32(2) + u64(1000))]
     )
 
-    error = assert_raises(::PayCore::Solana::Transaction::UnsupportedVersionError) { ::PayCore::Solana::Transaction.from_bytes(raw) }
-    assert_equal "legacy transactions are not supported; use a version 0 or version 1 message", error.message
+    tx = ::PayCore::Solana::Transaction.from_bytes(raw)
 
-    # `from_base64` must surface the message verbatim (no payload-wrap prefix).
-    error = assert_raises(ArgumentError) { ::PayCore::Solana::Transaction.from_base64(Base64.strict_encode64(raw)) }
-    assert_equal ::PayCore::Solana::Transaction::LEGACY_UNSUPPORTED, error.message
+    assert_equal "legacy", tx.version
+    assert_equal payer, tx.message.account_keys[0]
+    assert_equal recipient, tx.message.account_keys[1]
+    assert_empty tx.message.address_table_lookups
+    assert_equal raw, tx.to_bytes
+    assert_equal raw, ::PayCore::Solana::Transaction.from_base64(Base64.strict_encode64(raw)).to_bytes
+  end
+
+  def test_rejects_trailing_bytes_after_either_message_framing
+    account_keys = [pubkey(1), pubkey(2), PROGRAMS::SYSTEM_PROGRAM]
+    instructions = [compiled_instruction(2, [0, 1], u32(2) + u64(1000))]
+    [
+      v0_transaction(account_keys: account_keys, instructions: instructions),
+      legacy_transaction(account_keys: account_keys, instructions: instructions)
+    ].each do |raw|
+      error = assert_raises(ArgumentError) { ::PayCore::Solana::Transaction.from_bytes(raw + "\x00".b) }
+      assert_match(/trailing bytes after transaction message/, error.message)
+    end
   end
 
   def test_parses_v0_transaction_without_address_lookups

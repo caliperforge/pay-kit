@@ -51,7 +51,7 @@ from solana_pay_kit._paycore.paymentchannels import (
     voucher_message_bytes,
 )
 from solana_pay_kit._paycore.rpc import SolanaRpc
-from solana_pay_kit._paycore.transaction import build_partially_signed_v0_transaction, require_versioned_wire
+from solana_pay_kit._paycore.transaction import build_partially_signed_v0_transaction
 from solana_pay_kit.errors import ConfigurationError, InvalidProofError
 from solana_pay_kit.protocols.programs.paymentchannels.accounts.channel import Channel
 from solana_pay_kit.protocols.x402.exact.verify import X402_VERSION
@@ -617,20 +617,12 @@ def _distribution_hash(distribution: list[Distribution]) -> bytes:
     return hasher.digest()
 
 
-def _payment_invalid(message: str) -> InvalidProofError:
-    return InvalidProofError(message, code="payment_invalid")
-
-
 def _decode_transaction(transaction_b64: str) -> tuple[list[str], list[Any]]:
-    """Decode a base64 v0 transaction into ``(account_keys, instructions)``.
-
-    Legacy wires are rejected by ``require_versioned_wire``.
-    """
+    """Decode a base64 (legacy or v0) transaction into ``(account_keys, instructions)``."""
     from solders.transaction import VersionedTransaction
 
     try:
         raw = base64.b64decode(transaction_b64, validate=True)
-        require_versioned_wire(raw, error=_payment_invalid)
         message = VersionedTransaction.from_bytes(raw).message
     except InvalidProofError:
         raise
@@ -652,7 +644,6 @@ def _cosign_fee_payer(transaction_b64: str, signer: LocalSigner) -> bytes:
 
     raw = base64.b64decode(transaction_b64)
     fee_payer = Pubkey.from_string(signer.pubkey())
-    require_versioned_wire(raw, error=_payment_invalid)
     vtx = VersionedTransaction.from_bytes(raw)
     account_keys = list(vtx.message.account_keys)
     message_bytes = bytes(to_bytes_versioned(vtx.message))

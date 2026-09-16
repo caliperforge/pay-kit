@@ -181,17 +181,17 @@ function shape_from_transaction(string $transactionBase64): array
     }
 
     $tx = TransactionWire::deserialize($wire);
-    if ($tx->message->addressTableLookups !== []) {
+    if ($tx->addressTableLookups() !== []) {
         throw new InvalidArgumentException('v0 address lookup tables are not supported');
     }
-    $accountKeys = $tx->message->staticAccountKeys;
+    $accountKeys = $tx->staticAccountKeys();
     $instructions = array_map(
         static fn (object $ix): array => [
             'programIdIndex' => $ix->programIdIndex,
             'accounts' => $ix->accountKeyIndexes,
             'data' => $ix->data,
         ],
-        $tx->message->compiledInstructions,
+        $tx->compiledInstructions(),
     );
 
     if ($accountKeys === []) {
@@ -485,7 +485,7 @@ function build_fixture(ChargeRequest $request, array $signerSecretKey): string
     $readonlyUnsigned = count($keys) - 1;
 
     // v0 wire: version prefix, header, keys, blockhash, instructions, and an
-    // empty address-table-lookup vector. The server rejects legacy messages.
+    // empty address-table-lookup vector. Clients never build legacy messages.
     $message = chr(0x80) . chr($signerCount) . chr(0) . chr($readonlyUnsigned);
     $message .= compact_u16(count($keys));
     foreach ($keys as $k) {

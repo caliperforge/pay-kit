@@ -1183,7 +1183,8 @@ impl Mpp {
                     VerificationError::invalid_payload(format!("Invalid base64 transaction: {e}"))
                 })?;
 
-        // Canonical decode: version 0 or 1, no legacy, no trailing bytes.
+        // Canonical decode: legacy (policed as version 0), version 0 or 1, no
+        // trailing bytes.
         let mut tx = crate::core::tx::decode_bytes(&tx_bytes)
             .map_err(|e| VerificationError::invalid_payload(format!("Invalid transaction: {e}")))?;
 

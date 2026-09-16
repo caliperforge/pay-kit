@@ -1,6 +1,7 @@
 --[[
-Solana transaction codec for v0 (versioned) messages. Legacy (unprefixed)
-messages are rejected at the decode boundary with `M.LEGACY_UNSUPPORTED`.
+Solana transaction codec for legacy and v0 (versioned) messages. Clients only
+build v0, but servers keep accepting a pre-cutover client's legacy
+(unprefixed) message and police it under the v0 rules.
 
 Mirrors `ruby/lib/mpp/methods/solana/transaction.rb`. Parses the wire
 bytes a Solana JSON-RPC `sendTransaction` payload carries, exposes the
@@ -17,9 +18,6 @@ local base58 = require('pay_kit.solana.base58')
 local base64_std = require('pay_kit.util.base64_std')
 
 local M = {}
-
---- Error text raised (verbatim, no position prefix) for a legacy message.
-M.LEGACY_UNSUPPORTED = 'legacy transactions are not supported; use a version 0 or version 1 message'
 
 -- Cursor over a raw byte string. Implementation-private; consumers go through
 -- the M.parse / M.from_base64 functions.
@@ -128,22 +126,22 @@ local function parse_instruction(cursor)
   }
 end
 
--- Parse a Solana transaction message. Only v0 (leading 0x80 prefix) is
--- accepted: a legacy message (no version byte) raises `M.LEGACY_UNSUPPORTED`
--- verbatim, and v1 is not implemented. v0 messages carry a list of
--- address-table-lookup entries the verifier inspects via
--- `message.address_table_lookups`.
+-- Parse a Solana transaction message. Both legacy (no version byte) and v0
+-- (leading 0x80 prefix) are accepted; v1 is not implemented. v0 messages
+-- additionally carry a list of address-table-lookup entries the verifier
+-- inspects via `message.address_table_lookups` (always empty for legacy).
 local function parse_message(raw)
   local cursor = new_cursor(raw)
+  local version = 'legacy'
   local first = cursor:peek()
-  if first < 128 then
-    error(M.LEGACY_UNSUPPORTED, 0)
+  if first >= 128 then
+    local version_byte = first - 128
+    if version_byte ~= 0 then
+      error('unsupported transaction version: ' .. tostring(version_byte))
+    end
+    version = 0
+    cursor:byte()
   end
-  local version = first - 128
-  if version ~= 0 then
-    error('unsupported transaction version: ' .. tostring(version))
-  end
-  cursor:byte()
   local header = {
     required_signatures = cursor:byte(),
     readonly_signed = cursor:byte(),
@@ -161,9 +159,16 @@ local function parse_message(raw)
     instructions[#instructions + 1] = parse_instruction(cursor)
   end
   local lookups = {}
-  local lookup_count = cursor:compact_u16()
-  for _ = 1, lookup_count do
-    lookups[#lookups + 1] = parse_lookup(cursor)
+  if version == 0 then
+    local lookup_count = cursor:compact_u16()
+    for _ = 1, lookup_count do
+      lookups[#lookups + 1] = parse_lookup(cursor)
+    end
+  end
+  -- Canonical encoding only: what the signatures cover is exactly what
+  -- re-serializes, so a message followed by stray bytes is malformed.
+  if cursor.offset <= #raw then
+    error('trailing bytes after transaction message')
   end
   return {
     raw = raw,

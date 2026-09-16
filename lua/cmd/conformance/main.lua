@@ -289,7 +289,7 @@ local function build_fixture(flat, signer_secret)
   local readonly_unsigned = #keys - 1
 
   -- v0 wire: version prefix, header, keys, blockhash, instructions, and an
-  -- empty address-table-lookup vector. The server rejects legacy messages.
+  -- empty address-table-lookup vector. Clients never build legacy messages.
   local parts = {}
   parts[#parts + 1] = string.char(0x80)
   parts[#parts + 1] = string.char(signer_count, 0, readonly_unsigned)

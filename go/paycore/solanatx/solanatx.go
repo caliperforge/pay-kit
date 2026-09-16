@@ -122,8 +122,9 @@ func FindAssociatedTokenAddressWithProgram(wallet, mint, tokenProgram solana.Pub
 }
 
 // NewV0Transaction assembles a version 0 transaction with only static
-// account keys (no address-table lookups). Servers reject legacy messages,
-// so every client path builds through here.
+// account keys (no address-table lookups). Clients never build legacy
+// messages, so every client path builds through here; servers still accept
+// legacy from pre-cutover clients (see DecodeTransaction).
 func NewV0Transaction(instructions []solana.Instruction, recentBlockhash solana.Hash, opts ...solana.TransactionOption) (*solana.Transaction, error) {
 	tx, err := solana.NewTransaction(instructions, recentBlockhash, opts...)
 	if err != nil {
@@ -142,25 +143,21 @@ func EncodeTransactionBase64(tx *solana.Transaction) (string, error) {
 	return base64.StdEncoding.EncodeToString(wire), nil
 }
 
-// ErrLegacyTransaction is returned by DecodeTransaction for a message with
-// no version prefix byte. Servers reject legacy messages everywhere; the text
-// matches the Rust server (core/tx/version.rs).
-var ErrLegacyTransaction = errors.New("legacy transactions are not supported; use a version 0 or version 1 message")
-
 // DecodeTransaction decodes a wire transaction supplied by a client and
 // enforces the message-version policy every server verifier shares: version
-// 0 is accepted, a legacy message fails with ErrLegacyTransaction, and any
-// other version (version 1 is not implemented in Go) is rejected cleanly.
+// 0 and legacy (unprefixed) messages are accepted, and any other version
+// (version 1 is not implemented in Go) is rejected cleanly. A legacy message
+// is policed exactly like version 0 (same size limit, ComputeBudget
+// instructions in the body, no address lookup tables) and is kept only for
+// existing clients: pay-kit clients never build one.
 func DecodeTransaction(wire []byte) (*solana.Transaction, error) {
 	tx := new(solana.Transaction)
 	if err := tx.UnmarshalWithDecoder(bin.NewBinDecoder(wire)); err != nil {
 		return nil, err
 	}
 	switch version := tx.Message.GetVersion(); version {
-	case solana.MessageVersionV0:
+	case solana.MessageVersionLegacy, solana.MessageVersionV0:
 		return tx, nil
-	case solana.MessageVersionLegacy:
-		return nil, ErrLegacyTransaction
 	default:
 		// solana-go stores the prefix byte minus 0x7f, so v0 is 1 and v1 is 2.
 		return nil, fmt.Errorf("unsupported transaction message version %d", int(version)-1)
@@ -184,19 +181,18 @@ var ErrMissingTransactionVersion = errors.New("RPC did not report the transactio
 
 // CheckReportedVersion enforces the message-version policy on the version
 // field of a getTransaction result, so signature-credential server paths
-// reject a landed legacy transaction before consuming it. version is the
-// field as reported: nil when absent, "legacy" for a legacy message, or the
-// numeric message version (rpc.TransactionVersion from a typed result,
-// float64 from raw JSON). Versions 0 and 1 are accepted.
+// apply the same policy as DecodeTransaction before consuming a landed
+// transaction. version is the field as reported: nil when absent, "legacy"
+// for a legacy message, or the numeric message version
+// (rpc.TransactionVersion from a typed result, float64 from raw JSON).
+// Legacy, 0 and 1 are accepted; a missing version is not, since nodes report
+// one for every transaction once asked.
 func CheckReportedVersion(version any) error {
 	switch v := version.(type) {
 	case nil:
 		return ErrMissingTransactionVersion
 	case rpc.TransactionVersion:
-		if v == rpc.LegacyTransactionVersion {
-			return ErrLegacyTransaction
-		}
-		if v == 0 || v == 1 {
+		if v == rpc.LegacyTransactionVersion || v == 0 || v == 1 {
 			return nil
 		}
 	case float64:
@@ -205,7 +201,7 @@ func CheckReportedVersion(version any) error {
 		}
 	case string:
 		if v == "legacy" {
-			return ErrLegacyTransaction
+			return nil
 		}
 	}
 	return fmt.Errorf("unsupported transaction version %v", version)
@@ -325,8 +321,8 @@ func SendTransaction(ctx context.Context, rpcClient RPCClient, tx *solana.Transa
 // FetchTransaction reads a confirmed transaction back by signature and
 // returns it decoded plus meta. The version the RPC reports is checked with
 // CheckReportedVersion and the returned wire bytes go through
-// DecodeTransaction, so a landed legacy transaction is rejected exactly like
-// client-supplied legacy bytes.
+// DecodeTransaction, so a landed transaction is held to the same version
+// policy as client-supplied bytes.
 func FetchTransaction(ctx context.Context, rpcClient RPCClient, signature solana.Signature) (*solana.Transaction, *rpc.TransactionMeta, error) {
 	maxVersion := uint64(1)
 	result, err := rpcClient.GetTransaction(ctx, signature, &rpc.GetTransactionOpts{
@@ -341,7 +337,7 @@ func FetchTransaction(ctx context.Context, rpcClient RPCClient, signature solana
 		return nil, nil, errors.New("RPC returned no transaction")
 	}
 	// solana-go decodes an absent version field as 0; the wire decode below
-	// is the backstop that still rejects legacy bytes in that case.
+	// still applies the version policy to the bytes themselves.
 	if err := CheckReportedVersion(result.Version); err != nil {
 		return nil, nil, err
 	}

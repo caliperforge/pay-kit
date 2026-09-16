@@ -182,7 +182,7 @@ class TxFixtureBuilder
     readonly_unsigned = keys.length - 1
 
     # Version-0 message: 0x80 prefix, then the header, and a zero-length
-    # address-table-lookup vector after the instructions. Servers reject
+    # address-table-lookup vector after the instructions. Clients never build
     # legacy (unprefixed) messages.
     message = +"".b
     message << [0x80].pack("C")

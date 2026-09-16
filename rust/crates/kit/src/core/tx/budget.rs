@@ -359,14 +359,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_messages_are_rejected() {
+    fn legacy_messages_are_budgeted_like_version_zero() {
         let msg = VersionedMessage::Legacy(solana_message::Message::new(
             &[transfer()],
             Some(&Pubkey::new_unique()),
         ));
-        assert!(DeclaredBudget::of(&msg)
-            .unwrap_err()
-            .to_string()
-            .contains("legacy"));
+        let declared = DeclaredBudget::of(&msg).unwrap();
+        assert_eq!(declared.unit_limit, None);
+        assert_eq!(declared.unit_price_micro_lamports, None);
     }
 }

@@ -7,7 +7,6 @@ import {
     getTransactionDecoder,
     isTransactionPartialSigner,
     type TransactionPartialSigner,
-    type TransactionVersion,
 } from '@solana/kit';
 import {
     getSubscriptionAuthorityDecoder,
@@ -40,7 +39,6 @@ import {
 } from '../shared/subscription.js';
 import {
     assertReportedTransactionVersion,
-    assertVersionedTransactionMessage,
     coSignBase64Transaction,
     transactionSignatureFromBase64,
 } from '../utils/transactions.js';
@@ -660,7 +658,6 @@ type CompiledMessage = {
     instructions: readonly CompiledInstruction[];
     signerAccounts: readonly string[];
     staticAccounts: readonly string[];
-    version: TransactionVersion;
 };
 
 type CompiledInstruction = {
@@ -670,20 +667,19 @@ type CompiledInstruction = {
 };
 
 function decodeCompiledMessage(clientTxBase64: string): CompiledMessage {
-    let message: CompiledMessage;
     try {
         const txBytes = getBase64Codec().encode(clientTxBase64);
         const decoded = getTransactionDecoder().decode(txBytes);
-        const compiled = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes) as unknown as Omit<
+        // The kit decoder dispatches on the version prefix byte, so legacy
+        // and v0 messages both decode to this shape.
+        const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes) as unknown as Omit<
             CompiledMessage,
             'signerAccounts'
         >;
-        message = { ...compiled, signerAccounts: Object.keys(decoded.signatures) };
+        return { ...message, signerAccounts: Object.keys(decoded.signatures) };
     } catch (e) {
         throw new Error(`Invalid transaction: ${e instanceof Error ? e.message : String(e)}`);
     }
-    assertVersionedTransactionMessage(message);
-    return message;
 }
 
 function extractSubscriberFromTransaction(clientTxBase64: string, challenge: ChallengeRequest): string {

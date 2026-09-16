@@ -18,7 +18,6 @@ import { getTransferSolInstruction } from '@solana-program/system';
 import {
     assertReportedTransactionVersion,
     coSignBase64Transaction,
-    LEGACY_TRANSACTION_ERROR,
     MISSING_TRANSACTION_VERSION_ERROR,
 } from '../utils/transactions.js';
 
@@ -119,8 +118,8 @@ test.each([0, 1])('assertReportedTransactionVersion accepts version %i', version
     expect(() => assertReportedTransactionVersion(version)).not.toThrow();
 });
 
-test('assertReportedTransactionVersion rejects a legacy transaction', () => {
-    expect(() => assertReportedTransactionVersion('legacy')).toThrow(LEGACY_TRANSACTION_ERROR);
+test('assertReportedTransactionVersion accepts a legacy transaction (policed as version 0)', () => {
+    expect(() => assertReportedTransactionVersion('legacy')).not.toThrow();
 });
 
 test.each([undefined, null])('assertReportedTransactionVersion rejects a missing version (%s)', version => {

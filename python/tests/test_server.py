@@ -17,7 +17,7 @@ from solders.transaction import VersionedTransaction
 from solana_pay_kit._paycore.errors import ChallengeExpiredError, ChallengeMismatchError, PaymentError, ReplayError
 from solana_pay_kit._paycore.solana import MEMO_PROGRAM, TOKEN_2022_PROGRAM, MethodDetails, Split
 from solana_pay_kit._paycore.store import MemoryStore
-from solana_pay_kit._paycore.transaction import LEGACY_TRANSACTION_REJECTED, TRANSACTION_VERSION_NOT_REPORTED
+from solana_pay_kit._paycore.transaction import TRANSACTION_VERSION_NOT_REPORTED
 from solana_pay_kit.protocols.mpp.core.types import ChallengeEcho, PaymentCredential
 from solana_pay_kit.protocols.mpp.intents.charge import ChargeRequest
 from solana_pay_kit.protocols.mpp.server.charge import (
@@ -2358,7 +2358,8 @@ class TestSignatureReportedVersion:
     """Push-mode parity with Rust ``core::tx::check_reported_version``: the
     node returns whatever ``maxSupportedTransactionVersion`` allows, so the
     server polices the reported ``version`` itself, before the signature is
-    consumed, exactly as ``require_versioned_wire`` does for transaction bytes.
+    consumed, with the same policy the decode boundary applies to transaction
+    bytes: legacy is accepted as version 0, a missing version is refused.
     """
 
     @staticmethod
@@ -2405,19 +2406,13 @@ class TestSignatureReportedVersion:
         )
         return credential, challenge
 
-    async def test_legacy_reported_version_rejected_before_consume(self):
-        mpp, rpc = self._mpp(self._sol_tx(version="legacy"))
+    async def test_legacy_reported_version_accepted(self):
+        # A pre-cutover client's landed legacy transaction settles like v0.
+        mpp, _rpc = self._mpp(self._sol_tx(version="legacy"))
         credential, challenge = self._credential(mpp)
-        with pytest.raises(PaymentError) as exc:
-            await _verify(mpp, credential, challenge)
-        assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-        assert exc.value.code == "invalid-payload"
-
-        # The signature was not consumed: once the node reports a versioned
-        # transaction the same credential settles instead of replaying.
-        rpc.tx = self._sol_tx()
         receipt = await _verify(mpp, credential, challenge)
         assert receipt.is_success()
+        assert receipt.reference == VALID_SIGNATURE
 
     async def test_missing_reported_version_rejected(self):
         tx = self._sol_tx()

@@ -1983,24 +1983,9 @@ func landLegacyPushTransaction(t *testing.T, rpcClient *testutil.FakeRPC, recipi
 	return credential, signature
 }
 
-func assertLegacyRejection(t *testing.T, err error) {
-	t.Helper()
-	if !errors.Is(err, solanatx.ErrLegacyTransaction) {
-		t.Fatalf("err = %v, want ErrLegacyTransaction", err)
-	}
-	var sdkErr *core.Error
-	if !errors.As(err, &sdkErr) || sdkErr.Code != core.ErrCodeInvalidPayload {
-		t.Fatalf("err = %#v, want code %q", err, core.ErrCodeInvalidPayload)
-	}
-	if !strings.Contains(err.Error(), "legacy transactions are not supported; use a version 0 or version 1 message") {
-		t.Fatalf("unexpected message %q", err)
-	}
-}
-
-// A landed v0 transaction the RPC reports as "legacy" is rejected before the
-// signature is consumed: once the RPC reports the real version the same
-// credential settles.
-func TestVerifySignatureRejectsLegacyReportedVersion(t *testing.T) {
+// A landed transaction the RPC reports as "legacy" is accepted and settled
+// exactly like a version-0 one: legacy is policed as version 0.
+func TestVerifySignatureAcceptsLegacyReportedVersion(t *testing.T) {
 	handler, rpcClient, cfg := newTestMpp(t)
 	challenge, err := handler.Charge(context.Background(), "0.001")
 	if err != nil {
@@ -2015,22 +2000,18 @@ func TestVerifySignatureRejectsLegacyReportedVersion(t *testing.T) {
 		t.Fatalf("parse authorization failed: %v", err)
 	}
 	rpcClient.TxVersion = `"legacy"`
-	_, err = verifyCredentialEchoed(handler, context.Background(), credential)
-	assertLegacyRejection(t, err)
-
-	rpcClient.TxVersion = "0"
 	receipt, err := verifyCredentialEchoed(handler, context.Background(), credential)
 	if err != nil {
-		t.Fatalf("verify after legacy rejection failed: %v", err)
+		t.Fatalf("verify failed: %v", err)
 	}
 	if receipt.Status != core.ReceiptStatusSuccess {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 }
 
-// A landed legacy transaction is rejected whether the RPC reports "legacy"
-// or omits the version field, and the replay marker stays untouched.
-func TestVerifySignatureRejectsLegacyTransaction(t *testing.T) {
+// A landed legacy transaction is accepted whether the RPC reports "legacy"
+// or omits the version field, and settling it consumes the replay marker.
+func TestVerifySignatureAcceptsLegacyTransaction(t *testing.T) {
 	cases := []struct {
 		name    string
 		version string
@@ -2047,14 +2028,19 @@ func TestVerifySignatureRejectsLegacyTransaction(t *testing.T) {
 			}
 			credential, signature := landLegacyPushTransaction(t, rpcClient, handler.recipient, challenge.ToEcho())
 			rpcClient.TxVersion = tc.version
-			_, err = verifyCredentialEchoed(handler, context.Background(), credential)
-			assertLegacyRejection(t, err)
+			receipt, err := verifyCredentialEchoed(handler, context.Background(), credential)
+			if err != nil {
+				t.Fatalf("verify failed: %v", err)
+			}
+			if receipt.Status != core.ReceiptStatusSuccess {
+				t.Fatalf("unexpected receipt: %#v", receipt)
+			}
 			inserted, err := handler.store.PutIfAbsent(context.Background(), consumedPrefix+signature, true)
 			if err != nil {
 				t.Fatalf("store: %v", err)
 			}
-			if !inserted {
-				t.Fatal("legacy rejection must not consume the replay marker")
+			if inserted {
+				t.Fatal("settling a legacy transaction must consume the replay marker")
 			}
 		})
 	}

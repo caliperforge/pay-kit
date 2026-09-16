@@ -693,7 +693,7 @@ class TransactionVerifierTest < Minitest::Test
     assert_match(/Unsupported network/, result.reason)
   end
 
-  def test_rejects_legacy_transaction_payload
+  def test_accepts_legacy_transaction_payload
     request = charge_request
     tx = Base64.strict_encode64(legacy_transaction(
       account_keys: [pubkey(1), request.recipient, PROGRAMS::SYSTEM_PROGRAM],
@@ -702,8 +702,7 @@ class TransactionVerifierTest < Minitest::Test
 
     result = @verifier.verify_transaction_payload(tx, request)
 
-    refute result.ok?
-    assert_equal "legacy transactions are not supported; use a version 0 or version 1 message", result.reason
+    assert result.ok?, result.reason
   end
 
   private

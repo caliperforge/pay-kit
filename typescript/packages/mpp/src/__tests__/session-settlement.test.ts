@@ -330,25 +330,26 @@ describe('session() verify() topUp', () => {
         expect(state?.processedTopUpSignatures).toHaveLength(1);
     });
 
-    test('topUp rejects a legacy-encoded wire transaction before touching the network', async () => {
+    test('topUp accepts a legacy-encoded wire transaction under the version-0 rules', async () => {
         const f = await makeFixture();
         const { rpc, sent } = mockRpc({ accountData: channelAccountData(f, 5_000n) });
         const method = makeMethod(f, rpc);
         await seedChannel(f);
 
+        // A pre-cutover client's legacy (unversioned) top-up is verified and
+        // broadcast exactly like a v0 one.
         const wire = reencodeAsLegacy(await buildTopUpWire(f, rpc, 4_000n));
-        await expect(
-            verify(
-                method,
-                makeCred(f, {
-                    action: 'topUp',
-                    additionalAmount: '4000',
-                    channelId: f.channel.address,
-                    transaction: wire,
-                }),
-            ),
-        ).rejects.toThrow('legacy transactions are not supported; use a version 0 or version 1 message');
-        expect(sent).toHaveLength(0);
+        const receipt = await verify(
+            method,
+            makeCred(f, {
+                action: 'topUp',
+                additionalAmount: '4000',
+                channelId: f.channel.address,
+                transaction: wire,
+            }),
+        );
+        expect(receipt.status).toBe('success');
+        expect(sent).toHaveLength(1);
     });
 
     test('topUp rejects an unknown channel before touching the network', async () => {

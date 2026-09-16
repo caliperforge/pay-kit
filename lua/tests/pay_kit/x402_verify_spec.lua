@@ -602,7 +602,49 @@ helper.test('verify_client_signatures rejects when no client signatures remain',
   helper.assert_true(ok or true)  -- soft contract; coverage exercise
 end)
 
-helper.test('verify rejects a legacy message at the decode boundary', function()
+-- Build a single-signer envelope whose only required signer is a fresh
+-- keypair and sign the message bytes exactly as framed: bare for legacy,
+-- 0x80-prefixed (plus the empty lookup vector) for v0.
+local function signed_envelope(legacy)
+  local sodium = require('luasodium')
+  local local_signer = require('pay_kit.solana.local_signer')
+  local pk, sk = sodium.crypto_sign_ed25519_seed_keypair(string.rep('\7', 32))
+  local _facilitator, authority, source, mint, _pay_to, destination = setup_actors()
+  local keys = standard_keys(base58.encode(pk), source, mint, destination, authority)
+  local ix_blobs = {
+    build_ix(5, {}, string.char(2) .. u32_le(200000)),
+    build_ix(5, {}, string.char(3) .. u64_le(1000)),
+    build_ix(6, {1, 2, 3, 4}, string.char(12) .. u64_le(1000) .. string.char(6)),
+    build_ix(7, {}, '/paid'),
+  }
+  local ix_blob = tx_mod.compact_u16(#ix_blobs)
+  for _, ix in ipairs(ix_blobs) do ix_blob = ix_blob .. ix end
+  local body = string.char(1, 0, 3) .. tx_mod.compact_u16(8) .. keys .. string.rep('\0', 32) .. ix_blob
+  local message = legacy and body or ('\x80' .. body .. tx_mod.compact_u16(0))
+  local signature = local_signer.from_bytes(sk):sign(message)
+  return tx_mod.compact_u16(1) .. signature .. message
+end
+
+helper.test('verify_client_signatures accepts a legacy message signed over its bare bytes', function()
+  x402_verify.verify_client_signatures(base64.encode(signed_envelope(true)), {})
+end)
+
+helper.test('verify_client_signatures accepts a v0 message signed over its prefixed bytes', function()
+  x402_verify.verify_client_signatures(base64.encode(signed_envelope(false)), {})
+end)
+
+helper.test('verify_client_signatures rejects a legacy message whose signature covers other bytes', function()
+  -- Sign the v0 framing, then strip the prefix and lookup vector: the
+  -- legacy message decodes, but the signature no longer covers it.
+  local raw = signed_envelope(false)
+  local sigs_len = 1 + 64
+  local legacy = raw:sub(1, sigs_len) .. raw:sub(sigs_len + 2, #raw - 1)
+  local ok, err = pcall(x402_verify.verify_client_signatures, base64.encode(legacy), {})
+  helper.assert_true(not ok, 'a re-framed message must fail signature verification')
+  helper.assert_true(tostring(err):find('invalid_exact_svm_payload_signature', 1, true), tostring(err))
+end)
+
+helper.test('verify accepts a legacy message under the v0 rules', function()
   local facilitator, authority, source, mint, pay_to, destination = setup_actors()
   local keys = standard_keys(facilitator, source, mint, destination, authority)
   local raw = assemble(keys, 8, {
@@ -611,15 +653,13 @@ helper.test('verify rejects a legacy message at the decode boundary', function()
     build_ix(6, {1, 2, 3, 4}, string.char(12) .. u64_le(1000) .. string.char(6)),
     build_ix(7, {}, '/paid'),
   })
-  -- Re-frame the same message as a legacy wire: drop the 0x80 version
-  -- prefix and the trailing empty address-table-lookup vector.
+  -- Re-frame the same message as a legacy wire, as a pre-cutover client
+  -- sends it: drop the 0x80 version prefix and the trailing empty
+  -- address-table-lookup vector.
   local sigs_len = 1 + 64
   local legacy = raw:sub(1, sigs_len) .. raw:sub(sigs_len + 2, #raw - 1)
   local ok, err = pcall(x402_verify.verify, base64.encode(legacy),
     default_offer(facilitator, mint, pay_to), {facilitator})
-  helper.assert_true(not ok, 'legacy wire must be rejected')
-  helper.assert_equal(tostring(err),
-    'invalid_exact_svm_payload_transaction_parse: '
-    .. 'legacy transactions are not supported; use a version 0 or version 1 message')
+  helper.assert_true(ok, 'legacy wire must be accepted: ' .. tostring(err))
 end)
 end

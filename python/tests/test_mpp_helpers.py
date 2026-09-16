@@ -25,7 +25,6 @@ from solana_pay_kit._paycore.solana import (
     MethodDetails,
     Split,
 )
-from solana_pay_kit._paycore.transaction import LEGACY_TRANSACTION_REJECTED
 from solana_pay_kit.protocols.mpp.server import charge as M
 
 # ---------------------------------------------------------------------------
@@ -473,18 +472,15 @@ def test_extract_recent_blockhash_v0():
     assert M._extract_recent_blockhash(_build_simple_v0_tx()) == "11111111111111111111111111111111"
 
 
-def test_extract_recent_blockhash_rejects_legacy():
-    with pytest.raises(PaymentError) as exc:
-        M._extract_recent_blockhash(_build_simple_legacy_tx())
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-    assert exc.value.code == "invalid-payload-type"
+def test_extract_recent_blockhash_legacy():
+    # A pre-cutover client's legacy (unprefixed) wire decodes like v0.
+    assert M._extract_recent_blockhash(_build_simple_legacy_tx()) == "11111111111111111111111111111111"
 
 
-def test_decode_legacy_payment_instructions_rejects_legacy():
-    with pytest.raises(PaymentError) as exc:
-        M._decode_legacy_payment_instructions(_build_simple_legacy_tx())
-    assert str(exc.value) == LEGACY_TRANSACTION_REJECTED
-    assert exc.value.code == "invalid-payload-type"
+def test_decode_legacy_payment_instructions_accepts_legacy():
+    out = M._decode_legacy_payment_instructions(_build_simple_legacy_tx())
+    assert [item["parsed"]["type"] for item in out] == ["transfer"]
+    assert out[0]["parsed"]["info"]["lamports"] == "1"
 
 
 def test_decode_legacy_payment_instructions_invalid_base64():

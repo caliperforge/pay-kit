@@ -813,26 +813,31 @@ final class SolanaChargeTransactionVerifierTest extends TestCase
         return $this->v0TransactionBase64($fixture['feePayer'], $instructions);
     }
 
-    public function testRejectsLegacyTransaction(): void
+    public function testAcceptsLegacyTransaction(): void
     {
         $fixture = $this->fixture();
-        // Legacy (unprefixed) message: the decode boundary must reject it
-        // before any structural rule runs, with the canonical reason text.
+        // The SOL payload every other test verifies as v0, framed as a legacy
+        // (unprefixed) message the way a pre-cutover client sends it: decoded
+        // and verified under the same structural rules.
         $transaction = Transaction::new(
-            [SystemProgram::transfer($fixture['payer'], $fixture['recipient'], 1000)],
+            [
+                SystemProgram::transfer($fixture['payer'], $fixture['recipient'], 750),
+                SystemProgram::transfer($fixture['payer'], $fixture['splitRecipient'], 250),
+                MemoProgram::create('order-123'),
+                MemoProgram::create('split memo'),
+            ],
             $fixture['feePayer'],
             str_repeat("\x09", 32),
         );
 
         $result = $this->verify($this->solRequest($fixture), base64_encode($transaction->serialize(verifySignatures: false)));
 
-        self::assertFalse($result->ok);
-        self::assertSame('legacy transactions are not supported; use a version 0 or version 1 message', $result->reason);
+        self::assertTrue($result->ok, (string) $result->reason);
     }
 
     /**
-     * Compile a v0 (versioned) transaction: the only client wire the server
-     * accepts.
+     * Compile a v0 (versioned) transaction, the wire every pay-kit client
+     * emits.
      *
      * @param array<int, TransactionInstruction> $instructions
      */

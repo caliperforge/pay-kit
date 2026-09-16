@@ -75,7 +75,8 @@ func TestVerifyChargeTransactionPreBroadcastRejectsUndecodableTransaction(t *tes
 	}
 }
 
-func TestVerifyChargeTransactionPreBroadcastRejectsLegacyTransaction(t *testing.T) {
+// A legacy (unprefixed) message is verified under the same rules as v0.
+func TestVerifyChargeTransactionPreBroadcastAcceptsLegacyTransaction(t *testing.T) {
 	payer := testutil.NewPrivateKey()
 	recipient := testutil.NewPrivateKey().PublicKey()
 
@@ -87,10 +88,8 @@ func TestVerifyChargeTransactionPreBroadcastRejectsLegacyTransaction(t *testing.
 	}
 	request := intents.ChargeRequest{Amount: "1000", Currency: "sol", Recipient: recipient.String()}
 
-	err = VerifyChargeTransactionPreBroadcast(encoded, request, paycore.MethodDetails{}, "localnet")
-	assertPreBroadcastCode(t, err, core.ErrCodeInvalidPayload)
-	if err.Error() != solanatx.ErrLegacyTransaction.Error() {
-		t.Fatalf("err = %q, want %q", err, solanatx.ErrLegacyTransaction)
+	if err := VerifyChargeTransactionPreBroadcast(encoded, request, paycore.MethodDetails{}, "localnet"); err != nil {
+		t.Fatalf("expected legacy SOL transfer to pass pre-broadcast verify: %v", err)
 	}
 }
 

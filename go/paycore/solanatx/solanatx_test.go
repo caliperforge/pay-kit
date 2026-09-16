@@ -330,7 +330,9 @@ func TestDecodeTransactionAcceptsV0(t *testing.T) {
 	}
 }
 
-func TestDecodeTransactionRejectsLegacy(t *testing.T) {
+// A legacy (unprefixed) message is what a pre-cutover client sends: never
+// built by pay-kit clients, still accepted by every server decode boundary.
+func TestDecodeTransactionAcceptsLegacy(t *testing.T) {
 	tx, err := DecodeTransaction(signedV0Wire(t))
 	if err != nil {
 		t.Fatalf("decode v0 failed: %v", err)
@@ -343,15 +345,18 @@ func TestDecodeTransactionRejectsLegacy(t *testing.T) {
 	if wire[65]&0x80 != 0 {
 		t.Fatalf("fixture still carries a version prefix: %#x", wire[65])
 	}
-	_, err = DecodeTransaction(wire)
-	if !errors.Is(err, ErrLegacyTransaction) {
-		t.Fatalf("err = %v, want ErrLegacyTransaction", err)
+	decoded, err := DecodeTransaction(wire)
+	if err != nil {
+		t.Fatalf("decode legacy failed: %v", err)
 	}
-	if err.Error() != "legacy transactions are not supported; use a version 0 or version 1 message" {
-		t.Fatalf("unexpected message %q", err)
+	if decoded.Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("version = %v, want legacy", decoded.Message.GetVersion())
 	}
-	if _, err := DecodeTransactionBase64(base64.StdEncoding.EncodeToString(wire)); !errors.Is(err, ErrLegacyTransaction) {
-		t.Fatalf("base64 err = %v, want ErrLegacyTransaction", err)
+	if len(decoded.Message.Instructions) != 1 || len(decoded.Message.AccountKeys) != len(tx.Message.AccountKeys) {
+		t.Fatalf("legacy decode lost content: %+v", decoded.Message)
+	}
+	if _, err := DecodeTransactionBase64(base64.StdEncoding.EncodeToString(wire)); err != nil {
+		t.Fatalf("base64 decode legacy failed: %v", err)
 	}
 }
 
@@ -364,7 +369,7 @@ func TestDecodeTransactionRejectsUnsupportedVersionCleanly(t *testing.T) {
 		t.Fatalf("message prefix = %#x, want 0x80", wire[65])
 	}
 	wire[65] = 0x81
-	if _, err := DecodeTransaction(wire); err == nil || errors.Is(err, ErrLegacyTransaction) {
+	if _, err := DecodeTransaction(wire); err == nil || !strings.Contains(err.Error(), "unsupported transaction message version 1") {
 		t.Fatalf("err = %v, want unsupported-version rejection", err)
 	}
 	// A truncated version-1 payload must fail cleanly too.
@@ -846,27 +851,18 @@ func TestCheckReportedVersion(t *testing.T) {
 	if got := ErrMissingTransactionVersion.Error(); got != "RPC did not report the transaction version" {
 		t.Fatalf("unexpected message %q", got)
 	}
-	for _, version := range []any{rpc.TransactionVersion(0), rpc.TransactionVersion(1), float64(0), float64(1)} {
+	// Legacy is accepted alongside 0 and 1: it is policed as version 0.
+	for _, version := range []any{rpc.TransactionVersion(0), rpc.TransactionVersion(1), float64(0), float64(1), rpc.LegacyTransactionVersion, "legacy"} {
 		if err := CheckReportedVersion(version); err != nil {
 			t.Fatalf("version %v: %v, want accept", version, err)
 		}
 	}
-	sentinels := []struct {
-		version any
-		want    error
-	}{
-		{nil, ErrMissingTransactionVersion},
-		{rpc.LegacyTransactionVersion, ErrLegacyTransaction},
-		{"legacy", ErrLegacyTransaction},
-	}
-	for _, tc := range sentinels {
-		if err := CheckReportedVersion(tc.version); !errors.Is(err, tc.want) {
-			t.Fatalf("version %v: err = %v, want %v", tc.version, err, tc.want)
-		}
+	if err := CheckReportedVersion(nil); !errors.Is(err, ErrMissingTransactionVersion) {
+		t.Fatalf("nil version: err = %v, want ErrMissingTransactionVersion", err)
 	}
 	for _, version := range []any{rpc.TransactionVersion(2), float64(2), float64(0.5), "v0", true} {
 		err := CheckReportedVersion(version)
-		if err == nil || errors.Is(err, ErrLegacyTransaction) || errors.Is(err, ErrMissingTransactionVersion) {
+		if err == nil || errors.Is(err, ErrMissingTransactionVersion) {
 			t.Fatalf("version %v: err = %v, want unsupported-version rejection", version, err)
 		}
 	}
@@ -917,26 +913,34 @@ func TestFetchTransactionAcceptsReportedV0(t *testing.T) {
 	}
 }
 
-func TestFetchTransactionRejectsLegacyReportedVersion(t *testing.T) {
+func TestFetchTransactionAcceptsLegacyReportedVersion(t *testing.T) {
 	rpcClient := testutil.NewFakeRPC()
-	signature := landSignedWire(t, rpcClient, false)
+	signature := landSignedWire(t, rpcClient, true)
 	rpcClient.TxVersion = `"legacy"`
-	if _, _, err := FetchTransaction(context.Background(), rpcClient, signature); !errors.Is(err, ErrLegacyTransaction) {
-		t.Fatalf("err = %v, want ErrLegacyTransaction", err)
+	fetched, _, err := FetchTransaction(context.Background(), rpcClient, signature)
+	if err != nil {
+		t.Fatalf("fetch legacy failed: %v", err)
+	}
+	if fetched.Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("version = %v, want legacy", fetched.Message.GetVersion())
 	}
 	rpcClient.TxVersion = "2"
-	if _, _, err := FetchTransaction(context.Background(), rpcClient, signature); err == nil || errors.Is(err, ErrLegacyTransaction) {
+	if _, _, err := FetchTransaction(context.Background(), rpcClient, signature); err == nil || !strings.Contains(err.Error(), "unsupported transaction version") {
 		t.Fatalf("err = %v, want unsupported-version rejection", err)
 	}
 }
 
-func TestFetchTransactionMissingVersionRejectsLegacyBytes(t *testing.T) {
-	// solana-go decodes an omitted version field as 0, so the wire decode is
-	// what has to catch a legacy transaction served without a version.
+func TestFetchTransactionMissingVersionStillDecodesLegacyBytes(t *testing.T) {
+	// solana-go decodes an omitted version field as 0; the wire decode then
+	// applies the policy to the bytes, which accept a legacy message.
 	rpcClient := testutil.NewFakeRPC()
 	signature := landSignedWire(t, rpcClient, true)
 	rpcClient.TxVersion = ""
-	if _, _, err := FetchTransaction(context.Background(), rpcClient, signature); !errors.Is(err, ErrLegacyTransaction) {
-		t.Fatalf("err = %v, want ErrLegacyTransaction", err)
+	fetched, _, err := FetchTransaction(context.Background(), rpcClient, signature)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	if fetched.Message.GetVersion() != solana.MessageVersionLegacy {
+		t.Fatalf("version = %v, want legacy", fetched.Message.GetVersion())
 	}
 }

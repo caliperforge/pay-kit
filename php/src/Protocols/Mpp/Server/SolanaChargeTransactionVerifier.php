@@ -290,19 +290,19 @@ final class SolanaChargeTransactionVerifier implements PaymentVerifier, Transact
     private function decodeTransaction(string $wire): array
     {
         $transaction = TransactionWire::deserialize($wire);
-        if ($transaction->message->addressTableLookups !== []) {
+        if ($transaction->addressTableLookups() !== []) {
             throw new InvalidArgumentException('v0 address lookup tables are not supported');
         }
 
         return [
-            'accountKeys' => $transaction->message->staticAccountKeys,
+            'accountKeys' => $transaction->staticAccountKeys(),
             'instructions' => array_map(
                 static fn (object $instruction): array => [
                     'programIdIndex' => $instruction->programIdIndex,
                     'accounts' => $instruction->accountKeyIndexes,
                     'data' => $instruction->data,
                 ],
-                $transaction->message->compiledInstructions,
+                $transaction->compiledInstructions(),
             ),
         ];
     }

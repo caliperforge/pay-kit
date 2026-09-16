@@ -518,14 +518,12 @@ describe('validateActivationInstructions', () => {
         );
     });
 
-    test('rejects a legacy (unversioned) activation transaction', async () => {
+    test('accepts a legacy (unversioned) activation transaction under the version-0 rules', async () => {
         const { subscriberAddress, transaction } = await buildActivationTransactionBase64({ version: 'legacy' });
-        expect(() => __testing.extractSubscriberFromTransaction(transaction, challenge)).toThrow(
-            'legacy transactions are not supported; use a version 0 or version 1 message',
-        );
+        expect(__testing.extractSubscriberFromTransaction(transaction, challenge)).toBe(subscriberAddress);
         await expect(
             __testing.validateActivationInstructions(transaction, challenge, subscriberAddress),
-        ).rejects.toThrow('legacy transactions are not supported; use a version 0 or version 1 message');
+        ).resolves.toBeUndefined();
     });
 
     test('rejects transfer_subscription to an ATA owned by another recipient', async () => {
@@ -1594,22 +1592,19 @@ describe('subscription().verify() (push mode)', () => {
             };
         }
 
-        test('rejects a legacy activation reported by the RPC and leaves the signature unconsumed', async () => {
-            const { subscriber, transaction, subscriberAddress } = await buildActivationTransactionBase64();
+        test('settles a legacy activation reported by the RPC like a version-0 one', async () => {
+            const { subscriber, transaction, subscriberAddress } = await buildActivationTransactionBase64({
+                version: 'legacy',
+            });
             const authentication = await buildAuthentication('version-challenge', subscriber);
             const store = Store.memory();
             const method = pushModeMethod(store);
             const credential = pushModeCredential('version-challenge', authentication, 'legacy-activation-signature');
 
             mockPushModeFetch(transaction, subscriberAddress, 'legacy');
-            await expect(method.verify!({ credential, request: {} as never })).rejects.toThrow(
-                'legacy transactions are not supported; use a version 0 or version 1 message',
-            );
-            expect(await store.get('solana-subscription:consumed:legacy-activation-signature')).toBeNull();
-
-            mockPushModeFetch(transaction, subscriberAddress, 0);
             const receipt = await method.verify!({ credential, request: {} as never });
             expect(receipt.status).toBe('success');
+            expect(await store.get('solana-subscription:consumed:legacy-activation-signature')).not.toBeNull();
         });
 
         test('rejects when the RPC does not report the activation transaction version', async () => {

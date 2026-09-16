@@ -61,8 +61,8 @@ func VerifyChargeTransactionPreBroadcast(
 }
 
 // decodeCredentialTransaction decodes a client-supplied credential
-// transaction. Every decode failure, including the shared legacy-message
-// rejection, is reported as an invalid payload.
+// transaction through the shared version policy (legacy and v0 accepted).
+// Every decode failure is reported as an invalid payload.
 func decodeCredentialTransaction(transactionBase64 string) (*solana.Transaction, error) {
 	tx, err := solanatx.DecodeTransactionBase64(transactionBase64)
 	if err != nil {
