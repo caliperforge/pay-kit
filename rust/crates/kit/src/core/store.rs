@@ -580,6 +580,16 @@ pub struct ChannelState {
     /// Once set, no further vouchers are accepted.
     pub close_requested_at: Option<u64>,
 
+    /// The amount the close finalizer chose to seal the channel at, recorded
+    /// in the same atomic transition that chose it. Once set, the watermark
+    /// is frozen: [`ChannelState::commit_authorization`] refuses every further
+    /// charge, because a seal carrying this amount may already be in flight
+    /// and nothing above it could ever be redeemed.
+    ///
+    /// The Serde default keeps existing persisted channel records readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_cumulative: Option<u64>,
+
     /// Slot at which the channel was opened, when known.
     ///
     /// A channel-PDA seed since the epoch-addressed program update — persisted
@@ -950,6 +960,27 @@ impl ChannelState {
                     "authorization {authorization_id} is no longer reserved"
                 ))
             })?;
+        // The counterpart of `has_blocking_authorization`: once the finalizer
+        // has chosen the amount to seal at (`freeze_watermark_at`), or the
+        // seal has landed, the watermark is frozen and a charge written now
+        // could never be redeemed. Both transitions happen on this record
+        // under the store's per-channel atomicity, so a commit either lands
+        // before the choice and is included in it, or finds the fence and is
+        // refused — however long its store call was delayed in between. The
+        // request was served and the operator forfeits the charge; the
+        // reservation lease exists to keep a handler inside the window where
+        // its charge can still be applied.
+        if self.sealed {
+            return Err(StoreError::Internal(format!(
+                "authorization {authorization_id} cannot be charged: the channel is sealed"
+            )));
+        }
+        if let Some(fence) = self.final_cumulative {
+            return Err(StoreError::Internal(format!(
+                "authorization {authorization_id} cannot be charged: the channel's final \
+                 watermark is fixed at {fence} for sealing"
+            )));
+        }
         if cumulative < self.cumulative {
             return Err(StoreError::Internal(format!(
                 "authorization {authorization_id} would lower the watermark from {} to {cumulative}",
@@ -1029,6 +1060,40 @@ impl ChannelState {
     /// to be served a second time.
     pub fn has_in_flight_authorization(&self) -> bool {
         self.pending_setup.is_some() || !self.pending_deliveries.is_empty()
+    }
+
+    /// Whether reserved work could still reach an outcome a close finalizer
+    /// should wait for before sealing the channel.
+    ///
+    /// A reservation whose lease is still running may commit its charge, so
+    /// sealing under it would strand that charge. A lease that has run out
+    /// belongs to a request whose owner crashed or overran; nobody else ever
+    /// takes it over or releases it (see [`Self::reserve_authorization`]), so
+    /// waiting on it would block the seal forever, so it is treated as gone.
+    /// The finalizer records its choice with [`Self::freeze_watermark_at`] in
+    /// the same transition that consults this, and
+    /// [`Self::commit_authorization`] refuses a fenced record, so a request
+    /// that outlived its lease is either included in the seal or refused —
+    /// never charged behind it.
+    pub fn has_blocking_authorization(&self, now: i64) -> bool {
+        let live = |expires_at: i64| expires_at > now;
+        self.pending_setup
+            .as_ref()
+            .is_some_and(|setup| live(setup.expires_at))
+            || self
+                .pending_deliveries
+                .iter()
+                .any(|delivery| live(delivery.expires_at))
+    }
+
+    /// Record that the close finalizer will seal this channel carrying
+    /// `cumulative`, so no later commit can advance the watermark past what
+    /// the seal redeems. Must be called in the same atomic store transition
+    /// that chose the amount. A later pass may revise the amount (an early
+    /// seal that failed to land becomes a frozen seal after the deadline);
+    /// the fence itself is never lifted.
+    pub fn freeze_watermark_at(&mut self, cumulative: u64) {
+        self.final_cumulative = Some(cumulative);
     }
 
     /// Drop the expired committed prefix, then bound the committed tail to
@@ -2306,6 +2371,7 @@ mod tests {
             highest_voucher_signature: None,
             highest_voucher_expires_at: None,
             close_requested_at: None,
+            final_cumulative: None,
             open_slot: None,
             payer: String::new(),
             rent_payer: String::new(),
