@@ -82,12 +82,14 @@ async function getPayKitClient(network: string | undefined): Promise<PayKitClien
     payKitClient = await createPayKitClient({
       network: normalizedNetwork,
       onProgress: (e: unknown) => progressCallback?.(e as ProgressEvent),
-      // A Surfpool fork advertises `localnet` over MPP but the forked mainnet
-      // identity over x402. Allow both while retaining the default $1 cap.
-      permissions:
-        normalizedNetwork === 'localnet'
-          ? ClientPermissions.builder().allowNetwork('localnet').build()
-          : undefined,
+      // Surfpool's discovery metadata uses the forked mainnet identity, while
+      // its MPP challenge uses `localnet`. Authorize both explicit identities
+      // plus the configured deployment network while retaining the default
+      // $1 cap.
+      permissions: ClientPermissions.builder()
+        .allowNetwork('localnet')
+        .allowNetwork(normalizedNetwork)
+        .build(),
       rpcUrl: RPC_URL,
       signer,
     })
