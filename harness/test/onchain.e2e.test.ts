@@ -15,7 +15,7 @@
  */
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { createPayKit, usage, usd } from "@solana/pay-kit";
-import { createPayKitClient } from "@solana/pay-kit/client";
+import { ClientPermissions, createPayKitClient } from "@solana/pay-kit/client";
 import express, { type Request, type Response } from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
@@ -96,7 +96,16 @@ async function freshFundedClient(): Promise<KeyPairSigner> {
 /** Pay `path` and assert the server returns 200 — which only happens after
  * settlement confirms on-chain (a settlement failure surfaces as a 402). */
 async function payAndAssertSettled(path: string, init: RequestInit, protocol: "x402" | "mpp"): Promise<void> {
-  const client = await createPayKitClient({ rpcUrl: net.rpcUrl, signer: await freshFundedClient(), onProgress: () => {} });
+  const client = await createPayKitClient({
+    rpcUrl: net.rpcUrl,
+    signer: await freshFundedClient(),
+    network: "localnet",
+    // Surfpool's MPP challenge uses `localnet`, while its x402 challenge uses
+    // the mainnet CAIP-2 identity of the fork. Keep the default $1 cap while
+    // explicitly allowing both advertised network identities.
+    permissions: ClientPermissions.builder().allowNetwork("localnet").build(),
+    onProgress: () => {},
+  });
   const res = await client.fetch(`${baseUrl}${path}`, init, protocol);
   const text = await res.text().catch(() => "<unreadable>");
   expect(res.status, `settlement did not confirm on-chain: ${res.status} ${text}`).toBe(200);
