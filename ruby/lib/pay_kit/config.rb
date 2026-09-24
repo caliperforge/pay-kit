@@ -265,17 +265,22 @@ module PayKit
     end
 
     def configure_from_env(prefix = "PAY_KIT_", env: ENV)
-      vars = env.to_h.select { |k, _| k.start_with?(prefix) }.transform_keys { |k| k.delete_prefix(prefix) }
       configure do |c|
-        c.network = vars["NETWORK"] if vars.key?("NETWORK")
-        c.rpc_url = vars["RPC_URL"] if vars.key?("RPC_URL")
-        c.accept = split_env_list(vars["ACCEPT"]) if vars.key?("ACCEPT")
-        c.stablecoins = split_env_list(vars["STABLECOINS"]) if vars.key?("STABLECOINS")
-        c.preflight = parse_env_boolean(vars["PREFLIGHT"], "#{prefix}PREFLIGHT") if vars.key?("PREFLIGHT")
-        c.mpp.realm = vars["MPP_REALM"] if vars.key?("MPP_REALM")
-        c.mpp.challenge_binding_secret = vars["MPP_CHALLENGE_BINDING_SECRET"] if vars.key?("MPP_CHALLENGE_BINDING_SECRET")
-        c.mpp.expires_in = parse_env_integer(vars["MPP_EXPIRES_IN"], "#{prefix}MPP_EXPIRES_IN") if vars.key?("MPP_EXPIRES_IN")
-        c.x402.facilitator_url = vars["X402_FACILITATOR_URL"] if vars.key?("X402_FACILITATOR_URL")
+        env.each do |name, value|
+          next unless name.start_with?(prefix)
+
+          case name.delete_prefix(prefix)
+          when "NETWORK" then c.network = value
+          when "RPC_URL" then c.rpc_url = value unless value.empty?
+          when "ACCEPT" then c.accept = value.split(",").map(&:strip) - [""]
+          when "STABLECOINS" then c.stablecoins = value.split(",").map(&:strip) - [""]
+          when "PREFLIGHT" then c.preflight = env_bool(name, value)
+          when "MPP_REALM" then c.mpp.realm = value
+          when "MPP_CHALLENGE_BINDING_SECRET" then c.mpp.challenge_binding_secret = value
+          when "MPP_EXPIRES_IN" then c.mpp.expires_in = env_positive_int(name, value)
+          when "X402_FACILITATOR_URL" then c.x402.facilitator_url = value
+          end
+        end
       end
     end
 
@@ -297,22 +302,19 @@ module PayKit
 
     private
 
-    def split_env_list(value)
-      value.split(",").map(&:strip).reject(&:empty?)
-    end
-
-    def parse_env_boolean(value, key)
+    def env_bool(name, value)
       case value.strip.downcase
-      when "true", "1" then true
-      when "false", "0" then false
-      else raise ConfigurationError, "#{key} must be true, false, 1 or 0, got #{value.inspect}"
+      when "1", "true", "yes", "on" then true
+      when "0", "false", "no", "off" then false
+      else raise ConfigurationError, "#{name} must be one of 1/true/yes/on or 0/false/no/off, got #{value.inspect}"
       end
     end
 
-    def parse_env_integer(value, key)
-      Integer(value.strip, 10)
-    rescue ArgumentError
-      raise ConfigurationError, "#{key} must be an integer, got #{value.inspect}"
+    def env_positive_int(name, value)
+      int = Integer(value, 10, exception: false)
+      return int if int&.positive?
+
+      raise ConfigurationError, "#{name} must be a positive integer, got #{value.inspect}"
     end
   end
 end
