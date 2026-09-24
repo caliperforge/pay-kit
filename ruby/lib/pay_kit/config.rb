@@ -265,11 +265,13 @@ module PayKit
     end
 
     def configure_from_env(prefix = "PAY_KIT_", env: ENV)
+      prefix = prefix.upcase
       configure do |c|
         env.each do |name, value|
-          next unless name.start_with?(prefix)
+          key = name.upcase
+          next unless key.start_with?(prefix)
 
-          case name.delete_prefix(prefix)
+          case key.delete_prefix(prefix)
           when "NETWORK" then c.network = value
           when "RPC_URL" then c.rpc_url = value unless value.empty?
           when "ACCEPT" then c.accept = value.split(",").map(&:strip) - [""]
