@@ -368,8 +368,9 @@ class PayKitConfigTest < Minitest::Test
   end
 
   def test_configure_from_env_ignores_lowercase_names
-    PayKit.configure_from_env(env: {"pay_kit_network" => "solana_devnet"})
+    PayKit.configure_from_env(env: {"pay_kit_network" => "solana_devnet", "Pay_Kit_Rpc_Url" => "https://rpc.example.com"})
     assert_equal :solana_localnet, PayKit.config.network
+    assert_nil PayKit.config.rpc_url
   end
 
   private
