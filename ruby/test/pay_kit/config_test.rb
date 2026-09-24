@@ -291,6 +291,62 @@ class PayKitConfigTest < Minitest::Test
     end
   end
 
+  # --- configure_from_env ----------------------------------------------
+
+  def test_configure_from_env_reads_scalars
+    env = {
+      "PAY_KIT_NETWORK" => "solana_devnet",
+      "PAY_KIT_RPC_URL" => "https://helius.example.com",
+      "PAY_KIT_PREFLIGHT" => "FALSE",
+      "PAY_KIT_MPP_REALM" => "Shop",
+      "PAY_KIT_MPP_CHALLENGE_BINDING_SECRET" => "rotate-me",
+      "PAY_KIT_MPP_EXPIRES_IN" => "90",
+      "PAY_KIT_X402_FACILITATOR_URL" => "https://facilitator.example.com"
+    }
+    config = PayKit.configure_from_env(env: env)
+    assert config.frozen?
+    assert_equal :solana_devnet, config.network
+    assert_equal "https://helius.example.com", config.rpc_url
+    refute config.preflight
+    assert_equal "Shop", config.mpp.realm
+    assert_equal "rotate-me", config.mpp.challenge_binding_secret
+    assert_equal 90, config.mpp.expires_in
+    assert_equal "https://facilitator.example.com", config.x402.facilitator_url
+  end
+
+  def test_configure_from_env_splits_lists
+    config = PayKit.configure_from_env(env: {"PAY_KIT_ACCEPT" => "x402, mpp", "PAY_KIT_STABLECOINS" => "USDC,PYUSD"})
+    assert_equal %i[x402 mpp], config.accept
+    assert_equal %i[USDC PYUSD], config.stablecoins
+  end
+
+  def test_configure_from_env_keeps_defaults_when_unset
+    config = PayKit.configure_from_env(env: {})
+    assert_equal :solana_localnet, config.network
+    assert_equal %i[x402 mpp], config.accept
+    assert_equal %i[USDC], config.stablecoins
+    assert_equal 300, config.mpp.expires_in
+  end
+
+  def test_configure_from_env_custom_prefix
+    config = PayKit.configure_from_env("APP_", env: {"APP_NETWORK" => "solana_devnet", "PAY_KIT_NETWORK" => "bitcoin"})
+    assert_equal :solana_devnet, config.network
+  end
+
+  def test_configure_from_env_rejects_bad_values
+    {
+      "PAY_KIT_NETWORK" => "bitcoin",
+      "PAY_KIT_PREFLIGHT" => "maybe",
+      "PAY_KIT_MPP_EXPIRES_IN" => "soon",
+      "PAY_KIT_STABLECOINS" => " , "
+    }.each do |key, value|
+      PayKit.reset!
+      assert_raises(PayKit::ConfigurationError, key) do
+        PayKit.configure_from_env(env: {key => value})
+      end
+    end
+  end
+
   private
 
   # Replace `PayKit::Preflight.run` with a no-op spy for the duration of

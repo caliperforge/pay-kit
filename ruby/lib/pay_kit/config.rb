@@ -264,6 +264,21 @@ module PayKit
       @config
     end
 
+    def configure_from_env(prefix = "PAY_KIT_", env: ENV)
+      vars = env.to_h.select { |k, _| k.start_with?(prefix) }.transform_keys { |k| k.delete_prefix(prefix) }
+      configure do |c|
+        c.network = vars["NETWORK"] if vars.key?("NETWORK")
+        c.rpc_url = vars["RPC_URL"] if vars.key?("RPC_URL")
+        c.accept = split_env_list(vars["ACCEPT"]) if vars.key?("ACCEPT")
+        c.stablecoins = split_env_list(vars["STABLECOINS"]) if vars.key?("STABLECOINS")
+        c.preflight = parse_env_boolean(vars["PREFLIGHT"], "#{prefix}PREFLIGHT") if vars.key?("PREFLIGHT")
+        c.mpp.realm = vars["MPP_REALM"] if vars.key?("MPP_REALM")
+        c.mpp.challenge_binding_secret = vars["MPP_CHALLENGE_BINDING_SECRET"] if vars.key?("MPP_CHALLENGE_BINDING_SECRET")
+        c.mpp.expires_in = parse_env_integer(vars["MPP_EXPIRES_IN"], "#{prefix}MPP_EXPIRES_IN") if vars.key?("MPP_EXPIRES_IN")
+        c.x402.facilitator_url = vars["X402_FACILITATOR_URL"] if vars.key?("X402_FACILITATOR_URL")
+      end
+    end
+
     def config
       @config ||= Config.new
     end
@@ -278,6 +293,26 @@ module PayKit
     def reset!
       @config = nil
       @pricing = nil
+    end
+
+    private
+
+    def split_env_list(value)
+      value.split(",").map(&:strip).reject(&:empty?)
+    end
+
+    def parse_env_boolean(value, key)
+      case value.strip.downcase
+      when "true", "1" then true
+      when "false", "0" then false
+      else raise ConfigurationError, "#{key} must be true, false, 1 or 0, got #{value.inspect}"
+      end
+    end
+
+    def parse_env_integer(value, key)
+      Integer(value.strip, 10)
+    rescue ArgumentError
+      raise ConfigurationError, "#{key} must be an integer, got #{value.inspect}"
     end
   end
 end
