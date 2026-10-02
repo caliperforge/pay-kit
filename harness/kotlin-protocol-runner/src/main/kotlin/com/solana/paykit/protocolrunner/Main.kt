@@ -14,8 +14,6 @@ import kotlinx.serialization.json.put
 import java.util.Base64
 import kotlin.system.exitProcess
 
-private val json = Json { ignoreUnknownKeys = true }
-
 private val unsupported = setOf(
     "challenge.format",
     "credential.parse",
@@ -29,14 +27,14 @@ private val unsupported = setOf(
 fun main() {
     val response = respond(System.`in`.readBytes().decodeToString())
     println(response)
-    if (json.parseToJsonElement(response).jsonObject["error_type"] == JsonPrimitive("runner_error")) {
+    if (Json.parseToJsonElement(response).jsonObject["error_type"] == JsonPrimitive("runner_error")) {
         exitProcess(1)
     }
 }
 
 internal fun respond(line: String): String {
     val request = try {
-        json.parseToJsonElement(line).jsonObject
+        Json.parseToJsonElement(line).jsonObject
     } catch (error: IllegalArgumentException) {
         return failure(error.message ?: "malformed request", "runner_error")
     }
@@ -74,11 +72,11 @@ private fun formatCredential(input: JsonElement): String {
     val request = challenge["request"] ?: JsonObject(emptyMap())
     val encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(request.toString().encodeToByteArray())
     val wire = JsonObject(credential + ("challenge" to JsonObject(challenge + ("request" to JsonPrimitive(encoded)))))
-    return MppHeaders.formatAuthorization(json.decodeFromJsonElement(PaymentCredential.serializer(), wire))
+    return MppHeaders.formatAuthorization(Json.decodeFromJsonElement(PaymentCredential.serializer(), wire))
 }
 
 private fun decodeJson(value: String): JsonElement =
-    json.parseToJsonElement(Base64.getUrlDecoder().decode(value).decodeToString())
+    Json.parseToJsonElement(Base64.getUrlDecoder().decode(value).decodeToString())
 
 private fun family(op: String): String = when {
     op.endsWith(".parse") -> "parse_error"

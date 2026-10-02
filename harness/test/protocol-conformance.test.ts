@@ -7,8 +7,8 @@
 // `ProtocolAdapter` into the same `runCase` driver.
 
 import { describe, expect, it } from "vitest";
-import { caseRunsOnAdapter, collectProtocolCases } from "../src/protocol/vectors";
-import { runCase } from "../src/protocol/driver";
+import { caseRunsOnAdapter, collectProtocolCases, type ProtocolCase } from "../src/protocol/vectors";
+import { runCase, type ProtocolAdapter } from "../src/protocol/driver";
 import { typescriptProtocolAdapter } from "../src/protocol/runners/typescript";
 import {
   discoverProtocolRunners,
@@ -166,40 +166,86 @@ const smokeCases = (() => {
 // (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
 // mismatches on `receipt.parse :: success_receipt` were both fixed in the
 // per-SDK protocol-conformance round, so the remaining known runner
-// divergences are the ops the Kotlin SDK has no public function for.
-const KNOWN_RUNNER_DIVERGENCES: Record<string, Set<string>> = {
-  kotlin: new Set([
-    "base64url.encode :: empty_string",
-    "base64url.decode :: empty_string",
-    "challenge.id :: required_fields_only",
-    "challenge.format :: basic_challenge",
-    "credential.parse :: basic_credential",
-    "receipt.parse :: success_receipt",
-  ]),
+// divergences are Kotlin SDK gaps, each pinned to the exact answer the runner
+// gives so a runner that cannot start fails instead of passing as known.
+type KnownDivergence = { error_type: string; error: string } | { missing: string };
+
+const unsupported = (error_type: string): KnownDivergence => ({ error_type, error: "unsupported" });
+
+const KNOWN_RUNNER_DIVERGENCES: Record<string, Record<string, KnownDivergence>> = {
+  kotlin: {
+    "base64url.encode :: empty_string": unsupported("encoding_error"),
+    "base64url.decode :: empty_string": unsupported("encoding_error"),
+    "challenge.id :: required_fields_only": unsupported("generation_error"),
+    "challenge.format :: basic_challenge": unsupported("format_error"),
+    "credential.parse :: basic_credential": unsupported("parse_error"),
+    "receipt.parse :: success_receipt": unsupported("parse_error"),
+    // PaymentChallenge has no `description` field.
+    "challenge.parse :: full_challenge": { missing: "description" },
+    "challenge.parse :: escaped_quotes_in_description": { missing: "description" },
+    "challenge.parse :: unescaped_quotes_in_description": {
+      error_type: "parse_error",
+      error: "invalid Payment header",
+    },
+    // CredentialPayload has no `hash` field.
+    "credential.format :: credential_with_source": { error_type: "format_error", error: "'hash'" },
+  },
 };
+
+function caseFor(key: string): ProtocolCase {
+  const testCase = cases.find((c) => `${c.op} :: ${c.scenario}` === key);
+  if (!testCase) throw new Error(`${key} names no canonical case`);
+  return testCase;
+}
+
+async function expectKnownDivergence(
+  adapter: ProtocolAdapter,
+  testCase: ProtocolCase,
+  divergence: KnownDivergence,
+): Promise<void> {
+  const response = await adapter.runProtocolRequest({ op: testCase.op, input: testCase.input });
+  if ("missing" in divergence) {
+    const result = { ...(testCase.golden as Record<string, unknown>) };
+    delete result[divergence.missing];
+    expect(response).toEqual({ success: true, result });
+    return;
+  }
+  expect(response).toMatchObject({ success: false, error_type: divergence.error_type });
+  expect((response as { error: string }).error).toContain(divergence.error);
+}
 
 const runners = discoverProtocolRunners();
 for (const runner of runners) {
-  const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? new Set<string>();
+  const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? {};
   describe(`mpp-protocol conformance (spawned ${runner.language} runner)`, () => {
     const adapter = spawnedProtocolAdapter(runner);
     for (const testCase of smokeCases) {
       if (!caseRunsOnAdapter(testCase, runner.language)) continue;
       const key = `${testCase.op} :: ${testCase.scenario}`;
-      if (known.has(key)) {
-        it(`KNOWN DIVERGENCE: ${key}`, async () => {
-          const result = await runCase(adapter, testCase);
-          expect(
-            result.ok,
-            `${key} now conforms — remove from KNOWN_RUNNER_DIVERGENCES[${runner.language}]`,
-          ).toBe(false);
-        });
-        continue;
-      }
+      if (key in known) continue;
       it(key, async () => {
         const result = await runCase(adapter, testCase);
         expect(result.ok, result.detail).toBe(true);
       });
     }
+    for (const [key, divergence] of Object.entries(known)) {
+      it(`KNOWN DIVERGENCE: ${key}`, async () => {
+        await expectKnownDivergence(adapter, caseFor(key), divergence);
+      });
+    }
   });
 }
+
+describe("mpp-protocol conformance (spawned kotlin runner that cannot start)", () => {
+  it("fails every known divergence", async () => {
+    const kotlin = runners.find((runner) => runner.language === "kotlin");
+    if (!kotlin) throw new Error("no kotlin protocol runner manifest");
+    const adapter = spawnedProtocolAdapter({
+      ...kotlin,
+      command: ["sh", "-c", "exec build/install/missing/bin/missing"],
+    });
+    for (const [key, divergence] of Object.entries(KNOWN_RUNNER_DIVERGENCES.kotlin)) {
+      await expect(expectKnownDivergence(adapter, caseFor(key), divergence), key).rejects.toThrow();
+    }
+  });
+});
