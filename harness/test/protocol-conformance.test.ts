@@ -162,12 +162,21 @@ const smokeCases = (() => {
 // Each entry is `${op} :: ${scenario}` and is asserted to STILL diverge so the
 // gap fails loudly the moment the SDK conforms (mirrors KNOWN_TS_DIVERGENCES).
 //
-// Empty: every SDK now conforms to the canonical receipt shape. The Go
+// Kotlin only: every other SDK now conforms to the canonical receipt shape. The Go
 // (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
 // mismatches on `receipt.parse :: success_receipt` were both fixed in the
-// per-SDK protocol-conformance round, so there are no remaining known runner
-// divergences.
-const KNOWN_RUNNER_DIVERGENCES: Record<string, Set<string>> = {};
+// per-SDK protocol-conformance round, so the remaining known runner
+// divergences are the ops the Kotlin SDK has no public function for.
+const KNOWN_RUNNER_DIVERGENCES: Record<string, Set<string>> = {
+  kotlin: new Set([
+    "base64url.encode :: empty_string",
+    "base64url.decode :: empty_string",
+    "challenge.id :: required_fields_only",
+    "challenge.format :: basic_challenge",
+    "credential.parse :: basic_credential",
+    "receipt.parse :: success_receipt",
+  ]),
+};
 
 const runners = discoverProtocolRunners();
 for (const runner of runners) {
