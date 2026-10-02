@@ -166,8 +166,7 @@ const smokeCases = (() => {
 // (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
 // mismatches on `receipt.parse :: success_receipt` were both fixed in the
 // per-SDK protocol-conformance round, so the remaining known runner
-// divergences are Kotlin SDK gaps, each pinned to the exact answer the runner
-// gives so a runner that cannot start fails instead of passing as known.
+// divergences are Kotlin SDK gaps.
 type KnownDivergence = { error_type: string; error: string } | { missing: string };
 
 const unsupported = (error_type: string): KnownDivergence => ({ error_type, error: "unsupported" });

@@ -1,5 +1,5 @@
 {
   "language": "kotlin",
-  "command": ["sh", "-c", "exec build/install/mpp-kotlin-protocol-runner/bin/mpp-kotlin-protocol-runner"],
+  "command": ["sh", "-c", "gradle -q installDist >&2 && exec build/install/mpp-kotlin-protocol-runner/bin/mpp-kotlin-protocol-runner"],
   "cwd": "harness/kotlin-protocol-runner"
 }
