@@ -162,11 +162,7 @@ const smokeCases = (() => {
 // Per-language known divergences from the canonical oracle, keyed by language.
 // Each entry maps `${op} :: ${scenario}` to the runner's exact response, so the
 // gap fails loudly the moment the SDK's answer changes (mirrors KNOWN_TS_DIVERGENCES).
-//
-// The Go (`challengeId:""` injected) and Ruby (`challengeId` hard-required)
-// schema mismatches on `receipt.parse :: success_receipt` were both fixed in
-// the per-SDK protocol-conformance round. Swift's SolanaPayKit has no SDK
-// function for these ops.
+
 const swiftUnsupported = (op: string, errorType: string, thing: string): AdapterResponse => ({
   success: false,
   error: `${op} unsupported: SolanaPayKit has no ${thing}`,
