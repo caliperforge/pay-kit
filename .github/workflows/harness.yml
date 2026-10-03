@@ -341,6 +341,14 @@ jobs:
         env:
           MPP_CONFORMANCE_LANGUAGES: kotlin
         run: pnpm exec vitest run test/conformance.test.ts
+      - name: Build the Kotlin protocol runner
+        working-directory: harness/kotlin-protocol-runner
+        run: gradle installDist --no-daemon
+      - name: Run Kotlin mpp-protocol conformance vectors
+        working-directory: harness
+        env:
+          MPP_CONFORMANCE_LANGUAGES: kotlin
+        run: pnpm exec vitest run test/protocol-conformance.test.ts
       - name: Pre-warm Gradle for the Kotlin harness client
         working-directory: harness/kotlin-client
         run: gradle installDist --no-daemon
