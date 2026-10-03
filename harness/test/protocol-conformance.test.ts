@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { caseRunsOnAdapter, collectProtocolCases } from "../src/protocol/vectors";
-import { runCase } from "../src/protocol/driver";
+import { runCase, type ProtocolAdapter } from "../src/protocol/driver";
 import { parseLanguageAllowlist } from "../src/conformance/select";
 import { typescriptProtocolAdapter } from "../src/protocol/runners/typescript";
 import {
@@ -187,6 +187,7 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
     ["challenge.format :: basic_challenge", kotlinUnsupported("challenge.format", "format_error")],
     ["credential.parse :: basic_credential", kotlinUnsupported("credential.parse", "parse_error")],
     ["receipt.parse :: success_receipt", kotlinUnsupported("receipt.parse", "parse_error")],
+    ["receipt.format :: success_receipt", kotlinUnsupported("receipt.format", "format_error")],
     ["challenge.parse :: full_challenge", kotlinWithoutDescription("full_challenge")],
     [
       "challenge.parse :: escaped_quotes_in_description",
@@ -205,16 +206,29 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
   ]),
 };
 
+// Format cases whose paired parse op the runner lacks: the TS reference re-parses its wire.
+const REFERENCE_REPARSED_CASES: Record<string, Set<string>> = {
+  kotlin: new Set(["credential.format :: basic_credential"]),
+};
+const withReferenceReparse = (adapter: ProtocolAdapter, op: string): ProtocolAdapter => ({
+  name: adapter.name,
+  runProtocolRequest: (request) =>
+    (request.op === op ? adapter : typescriptProtocolAdapter).runProtocolRequest(request),
+});
+
 const allowlist = parseLanguageAllowlist(process.env.MPP_CONFORMANCE_LANGUAGES);
 const runners = discoverProtocolRunners().filter(
   (runner) => !allowlist || allowlist.has(runner.language),
 );
 for (const runner of runners) {
   const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? new Map<string, unknown>();
+  const reparsed = REFERENCE_REPARSED_CASES[runner.language] ?? new Set<string>();
   const keyOf = (testCase: (typeof cases)[number]) => `${testCase.op} :: ${testCase.scenario}`;
   describe(`mpp-protocol conformance (spawned ${runner.language} runner)`, () => {
     const adapter = spawnedProtocolAdapter(runner);
-    for (const testCase of cases.filter((c) => smokeCases.includes(c) || known.has(keyOf(c)))) {
+    for (const testCase of cases.filter(
+      (c) => smokeCases.includes(c) || known.has(keyOf(c)) || reparsed.has(keyOf(c)),
+    )) {
       if (!caseRunsOnAdapter(testCase, runner.language)) continue;
       const key = keyOf(testCase);
       if (known.has(key)) {
@@ -227,7 +241,10 @@ for (const runner of runners) {
         continue;
       }
       it(key, async () => {
-        const result = await runCase(adapter, testCase);
+        const result = await runCase(
+          reparsed.has(key) ? withReferenceReparse(adapter, testCase.op) : adapter,
+          testCase,
+        );
         expect(result.ok, result.detail).toBe(true);
       });
     }
