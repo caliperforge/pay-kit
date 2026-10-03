@@ -174,9 +174,10 @@ const kotlinUnsupported = (op: string, error_type: string) => ({
   error_type,
 });
 // Kotlin's PaymentChallenge has no `description` field.
-const kotlinWithoutDescription = {
-  success: true,
-  result: expect.not.objectContaining({ description: expect.anything() }),
+const kotlinWithoutDescription = (scenario: string) => {
+  const parse = cases.find((c) => c.op === "challenge.parse" && c.scenario === scenario);
+  const { description: _, ...result } = (parse as { golden: Record<string, unknown> }).golden;
+  return { success: true, result };
 };
 const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
   kotlin: new Map<string, unknown>([
@@ -186,8 +187,12 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
     ["challenge.format :: basic_challenge", kotlinUnsupported("challenge.format", "format_error")],
     ["credential.parse :: basic_credential", kotlinUnsupported("credential.parse", "parse_error")],
     ["receipt.parse :: success_receipt", kotlinUnsupported("receipt.parse", "parse_error")],
-    ["challenge.parse :: full_challenge", kotlinWithoutDescription],
-    ["challenge.parse :: escaped_quotes_in_description", kotlinWithoutDescription],
+    ["challenge.parse :: full_challenge", kotlinWithoutDescription("full_challenge")],
+    [
+      "challenge.parse :: escaped_quotes_in_description",
+      kotlinWithoutDescription("escaped_quotes_in_description"),
+    ],
+    // Kotlin's parser rejects text after a closing quote; the canonical parser truncates there.
     [
       "challenge.parse :: unescaped_quotes_in_description",
       { success: false, error: "invalid Payment header", error_type: "parse_error" },
