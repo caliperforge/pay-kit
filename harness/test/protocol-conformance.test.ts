@@ -167,7 +167,7 @@ const smokeCases = (() => {
 // (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
 // mismatches on `receipt.parse :: success_receipt` were both fixed in the
 // per-SDK protocol-conformance round. Each entry maps to the exact response the
-// runner gives, so a runner that cannot start never passes as a divergence.
+// runner gives.
 const kotlinUnsupported = (op: string, error_type: string) => ({
   success: false,
   error: `${op} unsupported by the Kotlin SDK`,
