@@ -60,13 +60,15 @@ func unsupported(_ op: String, _ thing: String) -> RunnerError {
 
 enum ChallengeFields {
     static let all: Set<String> = ["id", "realm", "method", "intent", "request", "expires", "digest", "opaque"]
+    // Spec challenge params PaymentChallenge cannot carry; extension params are ignored per spec.
+    static let unrepresentable: Set<String> = ["description"]
 }
 
 func parseChallenge(_ input: [String: Any]) throws -> [String: Any] {
     let header = try string(input, "header", at: "") ?? ""
     let challenge = try MppHeaders.parseWWWAuthenticate(header)
     let params = header.matches(of: #/[\s,]*([^=\s,"]+)\s*=\s*"(?:[^"\\]|\\.)*"/#).map { String($0.1) }
-    if let param = params.first(where: { !ChallengeFields.all.contains($0) }) {
+    if let param = params.first(where: ChallengeFields.unrepresentable.contains) {
         throw RunnerError(description: "unsupported field \(param)")
     }
     var result: [String: Any] = [

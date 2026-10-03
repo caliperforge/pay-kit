@@ -35,12 +35,21 @@ final class AbiFramingTests: XCTestCase {
         XCTAssertEqual((result["request"] as? [String: Any])?["amount"] as? String, "1000000")
     }
 
-    func testChallengeParseRejectsUnknownParam() throws {
+    func testChallengeParseRejectsDescription() throws {
         let header = basicChallenge + #", description="x""#
         let (response, exitCode) = try call(["op": "challenge.parse", "input": ["header": header]])
         XCTAssertEqual(exitCode, 0)
         XCTAssertEqual(response["error_type"] as? String, "parse_error")
         XCTAssertEqual(response["error"] as? String, "unsupported field description")
+    }
+
+    func testChallengeParseIgnoresExtensionParams() throws {
+        let header = basicChallenge + #", foo="bar", baz="qux""#
+        let (response, exitCode) = try call(["op": "challenge.parse", "input": ["header": header]])
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(response["success"] as? Bool, true)
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(Set(result.keys), ["id", "realm", "method", "intent", "request"])
     }
 
     func testMalformedRequestIsRunnerError() throws {
