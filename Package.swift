@@ -35,10 +35,20 @@ let package = Package(
             dependencies: ["SolanaPayKit"],
             path: "swift/Sources/mpp-conformance"
         ),
+        .executableTarget(
+            name: "mpp-protocol-runner",
+            dependencies: ["SolanaPayKit"],
+            path: "swift/Sources/mpp-protocol-runner"
+        ),
         .testTarget(
             name: "SolanaPayKitTests",
             dependencies: ["SolanaPayKit"],
             path: "swift/Tests/SolanaPayKitTests"
+        ),
+        .testTarget(
+            name: "MppProtocolRunnerTests",
+            dependencies: ["mpp-protocol-runner"],
+            path: "swift/Tests/MppProtocolRunnerTests"
         ),
     ]
 )
