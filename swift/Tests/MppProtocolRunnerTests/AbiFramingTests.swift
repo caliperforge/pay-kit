@@ -35,6 +35,14 @@ final class AbiFramingTests: XCTestCase {
         XCTAssertEqual((result["request"] as? [String: Any])?["amount"] as? String, "1000000")
     }
 
+    func testChallengeParseRejectsUnknownParam() throws {
+        let header = basicChallenge + #", description="x""#
+        let (response, exitCode) = try call(["op": "challenge.parse", "input": ["header": header]])
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertEqual(response["error_type"] as? String, "parse_error")
+        XCTAssertEqual(response["error"] as? String, "unsupported field description")
+    }
+
     func testMalformedRequestIsRunnerError() throws {
         for raw in [Data("not json".utf8), Data(#"{"op":1}"#.utf8)] {
             let (line, exitCode) = respond(to: raw)

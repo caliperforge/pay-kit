@@ -58,8 +58,17 @@ func unsupported(_ op: String, _ thing: String) -> RunnerError {
     RunnerError(description: "\(op) unsupported: SolanaPayKit has no \(thing)")
 }
 
+enum ChallengeFields {
+    static let all: Set<String> = ["id", "realm", "method", "intent", "request", "expires", "digest", "opaque"]
+}
+
 func parseChallenge(_ input: [String: Any]) throws -> [String: Any] {
-    let challenge = try MppHeaders.parseWWWAuthenticate(string(input, "header", at: "") ?? "")
+    let header = try string(input, "header", at: "") ?? ""
+    let challenge = try MppHeaders.parseWWWAuthenticate(header)
+    let params = header.matches(of: #/[\s,]*([^=\s,"]+)\s*=\s*"(?:[^"\\]|\\.)*"/#).map { String($0.1) }
+    if let param = params.first(where: { !ChallengeFields.all.contains($0) }) {
+        throw RunnerError(description: "unsupported field \(param)")
+    }
     var result: [String: Any] = [
         "id": challenge.id,
         "realm": challenge.realm,
@@ -76,9 +85,7 @@ func parseChallenge(_ input: [String: Any]) throws -> [String: Any] {
 func credential(from input: [String: Any]) throws -> PaymentCredential {
     try rejectUnknownKeys(input, ["challenge", "payload", "source"], at: "")
     let challenge = try object(input["challenge"], at: "challenge")
-    try rejectUnknownKeys(
-        challenge, ["id", "realm", "method", "intent", "request", "expires", "digest", "opaque"], at: "challenge."
-    )
+    try rejectUnknownKeys(challenge, ChallengeFields.all, at: "challenge.")
     let payload = try object(input["payload"], at: "payload")
     try rejectUnknownKeys(payload, ["type", "transaction", "signature"], at: "payload.")
     guard let request = challenge["request"] else { throw RunnerError(description: "missing challenge.request") }
