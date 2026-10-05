@@ -198,6 +198,14 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
       "challenge.parse :: unescaped_quotes_in_description",
       { success: false, error: "invalid Payment header", error_type: "parse_error" },
     ],
+    // Kotlin's parser accepts an empty `id`.
+    [
+      "challenge.parse :: error_empty_id",
+      {
+        success: true,
+        result: { id: "", realm: "api", method: "tempo", intent: "charge", request: {} },
+      },
+    ],
     // Kotlin's CredentialPayload has no `hash` field.
     [
       "credential.format :: credential_with_source",
