@@ -75,6 +75,31 @@ final class GateTest extends TestCase
         );
     }
 
+    public function testAcceptsBothProtocolsWhenAcceptInherited(): void
+    {
+        $g = new Gate(amount: Price::usd('1.00'));
+        $this->assertTrue($g->accepts(Protocol::X402));
+        $this->assertTrue($g->accepts(Protocol::Mpp));
+    }
+
+    public function testAcceptsHonorsExplicitAllowlist(): void
+    {
+        $g = new Gate(amount: Price::usd('1.00'), accept: [Protocol::Mpp]);
+        $this->assertFalse($g->accepts(Protocol::X402));
+        $this->assertTrue($g->accepts(Protocol::Mpp));
+    }
+
+    public function testAcceptsRefusesX402OnFeeGate(): void
+    {
+        $g = new Gate(
+            amount: Price::usd('1.00'),
+            payTo: 'SELLER',
+            feeWithin: ['PLATFORM' => Price::usd('0.10')],
+        );
+        $this->assertFalse($g->accepts(Protocol::X402));
+        $this->assertTrue($g->accepts(Protocol::Mpp));
+    }
+
     public function testPayoutNullForUnaddressedRecipient(): void
     {
         $g = new Gate(amount: Price::usd('1.00'), payTo: 'SELLER');
