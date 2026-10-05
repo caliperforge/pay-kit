@@ -70,7 +70,7 @@ private fun parseChallenge(input: JsonElement): JsonObject {
     val challenge = MppHeaders.parseWWWAuthenticate(input.jsonObject.getValue("header").jsonPrimitive.content)
     val fields = Json.encodeToJsonElement(PaymentChallenge.serializer(), challenge).jsonObject
     return JsonObject(
-        fields.filterValues { it != JsonPrimitive("") }.mapValues { (name, value) ->
+        fields.filter { (name, value) -> name !in setOf("expires", "digest") || value != JsonPrimitive("") }.mapValues { (name, value) ->
             if (name == "request" || name == "opaque") decodeJson(value.jsonPrimitive.content) else value
         },
     )

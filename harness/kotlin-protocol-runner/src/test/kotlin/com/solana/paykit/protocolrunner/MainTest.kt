@@ -57,6 +57,20 @@ class MainTest {
     }
 
     @Test
+    fun emptyRequestIsAParseError() {
+        val header = """Payment id="ch", realm="r", method="tempo", intent="charge", request="""""
+        val line = buildJsonObject {
+            put("op", "challenge.parse")
+            putJsonObject("input") { put("header", header) }
+        }.toString()
+
+        val response = answer(line)
+
+        assertEquals("false", response.field("success"))
+        assertEquals("parse_error", response.field("error_type"))
+    }
+
+    @Test
     fun refusesNonJson() {
         assertEquals("runner_error", answer("not json").field("error_type"))
     }
