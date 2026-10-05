@@ -341,9 +341,9 @@ jobs:
         env:
           MPP_CONFORMANCE_LANGUAGES: kotlin
         run: pnpm exec vitest run test/conformance.test.ts
-      - name: Build the Kotlin protocol runner
+      - name: Build and test the Kotlin protocol runner
         working-directory: harness/kotlin-protocol-runner
-        run: gradle installDist --no-daemon
+        run: gradle installDist test --no-daemon
       - name: Run Kotlin mpp-protocol conformance vectors
         working-directory: harness
         env:

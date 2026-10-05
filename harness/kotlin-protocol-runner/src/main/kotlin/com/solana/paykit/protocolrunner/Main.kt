@@ -1,3 +1,6 @@
+// Kotlin mpp-protocol conformance runner.
+// Reads one adapter-ABI request on stdin and writes one response line on stdout,
+// per the contract in harness/src/protocol/runners/spawn.ts.
 package com.solana.paykit.protocolrunner
 
 import com.solana.paykit.protocols.mpp.core.MppHeaders
