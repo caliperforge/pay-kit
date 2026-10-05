@@ -4,6 +4,7 @@
 package com.solana.paykit.protocolrunner
 
 import com.solana.paykit.protocols.mpp.core.MppHeaders
+import com.solana.paykit.protocols.mpp.core.PaymentChallenge
 import com.solana.paykit.protocols.mpp.core.PaymentCredential
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -67,16 +68,12 @@ private fun fail(error: String?, errorType: String) = buildJsonObject {
 
 private fun parseChallenge(input: JsonElement): JsonObject {
     val challenge = MppHeaders.parseWWWAuthenticate(input.jsonObject.getValue("header").jsonPrimitive.content)
-    return buildJsonObject {
-        put("id", challenge.id)
-        put("realm", challenge.realm)
-        put("method", challenge.method)
-        put("intent", challenge.intent)
-        put("request", decodeJson(challenge.request))
-        challenge.expires?.takeIf { it.isNotEmpty() }?.let { put("expires", it) }
-        challenge.digest?.takeIf { it.isNotEmpty() }?.let { put("digest", it) }
-        challenge.opaque?.let { put("opaque", decodeJson(it)) }
-    }
+    val fields = Json.encodeToJsonElement(PaymentChallenge.serializer(), challenge).jsonObject
+    return JsonObject(
+        fields.mapValues { (name, value) ->
+            if (name == "request" || name == "opaque") decodeJson(value.jsonPrimitive.content) else value
+        },
+    )
 }
 
 private fun decodeJson(base64Url: String): JsonElement =

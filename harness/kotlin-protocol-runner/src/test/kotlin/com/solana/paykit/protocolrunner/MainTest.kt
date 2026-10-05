@@ -43,6 +43,20 @@ class MainTest {
     }
 
     @Test
+    fun keepsEmptyOptionalField() {
+        val header = """Payment id="ch", realm="r", method="tempo", intent="charge", request="e30", expires="""""
+        val line = buildJsonObject {
+            put("op", "challenge.parse")
+            putJsonObject("input") { put("header", header) }
+        }.toString()
+
+        assertEquals(
+            Json.parseToJsonElement("""{"id":"ch","realm":"r","method":"tempo","intent":"charge","request":{},"expires":""}"""),
+            answer(line)["result"],
+        )
+    }
+
+    @Test
     fun refusesNonJson() {
         assertEquals("runner_error", answer("not json").field("error_type"))
     }

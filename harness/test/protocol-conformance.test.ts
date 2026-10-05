@@ -220,6 +220,10 @@ const allowlist = parseLanguageAllowlist(process.env.MPP_CONFORMANCE_LANGUAGES);
 const runners = discoverProtocolRunners().filter(
   (runner) => !allowlist || allowlist.has(runner.language),
 );
+it("every language in MPP_CONFORMANCE_LANGUAGES has a protocol runner", () => {
+  const found = new Set(runners.map((runner) => runner.language));
+  expect([...(allowlist ?? [])].filter((language) => !found.has(language))).toEqual([]);
+});
 for (const runner of runners) {
   const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? new Map<string, unknown>();
   const reparsed = REFERENCE_REPARSED_CASES[runner.language] ?? new Set<string>();
