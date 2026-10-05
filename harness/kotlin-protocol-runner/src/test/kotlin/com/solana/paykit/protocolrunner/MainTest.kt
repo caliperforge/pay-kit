@@ -43,7 +43,7 @@ class MainTest {
     }
 
     @Test
-    fun keepsEmptyOptionalField() {
+    fun dropsEmptyOptionalField() {
         val header = """Payment id="ch", realm="r", method="tempo", intent="charge", request="e30", expires="""""
         val line = buildJsonObject {
             put("op", "challenge.parse")
@@ -51,7 +51,7 @@ class MainTest {
         }.toString()
 
         assertEquals(
-            Json.parseToJsonElement("""{"id":"ch","realm":"r","method":"tempo","intent":"charge","request":{},"expires":""}"""),
+            Json.parseToJsonElement("""{"id":"ch","realm":"r","method":"tempo","intent":"charge","request":{}}"""),
             answer(line)["result"],
         )
     }
