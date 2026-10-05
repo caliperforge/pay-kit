@@ -214,6 +214,11 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
   ]),
 };
 
+// Ops the runner implements run every case; the rest run only the smoke slice.
+const IMPLEMENTED_OPS: Record<string, Set<string>> = {
+  kotlin: new Set(["challenge.parse", "credential.format"]),
+};
+
 // Format cases whose paired parse op the runner lacks: the TS reference re-parses its wire.
 const REFERENCE_REPARSED_CASES: Record<string, Set<string>> = {
   kotlin: new Set(["credential.format :: basic_credential"]),
@@ -235,11 +240,12 @@ it("every language in MPP_CONFORMANCE_LANGUAGES has a protocol runner", () => {
 for (const runner of runners) {
   const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? new Map<string, unknown>();
   const reparsed = REFERENCE_REPARSED_CASES[runner.language] ?? new Set<string>();
+  const implemented = IMPLEMENTED_OPS[runner.language] ?? new Set<string>();
   const keyOf = (testCase: (typeof cases)[number]) => `${testCase.op} :: ${testCase.scenario}`;
   describe(`mpp-protocol conformance (spawned ${runner.language} runner)`, () => {
     const adapter = spawnedProtocolAdapter(runner);
     for (const testCase of cases.filter(
-      (c) => smokeCases.includes(c) || known.has(keyOf(c)) || reparsed.has(keyOf(c)),
+      (c) => smokeCases.includes(c) || implemented.has(c.op) || known.has(keyOf(c)),
     )) {
       if (!caseRunsOnAdapter(testCase, runner.language)) continue;
       const key = keyOf(testCase);
