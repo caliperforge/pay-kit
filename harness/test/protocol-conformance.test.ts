@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import { caseRunsOnAdapter, collectProtocolCases } from "../src/protocol/vectors";
-import { runCase } from "../src/protocol/driver";
+import { runCase, type AdapterResponse } from "../src/protocol/driver";
+import { parseLanguageAllowlist } from "../src/conformance/select";
 import { typescriptProtocolAdapter } from "../src/protocol/runners/typescript";
 import {
   discoverProtocolRunners,
@@ -159,31 +160,80 @@ const smokeCases = (() => {
 })();
 
 // Per-language known divergences from the canonical oracle, keyed by language.
-// Each entry is `${op} :: ${scenario}` and is asserted to STILL diverge so the
-// gap fails loudly the moment the SDK conforms (mirrors KNOWN_TS_DIVERGENCES).
-//
-// Empty: every SDK now conforms to the canonical receipt shape. The Go
-// (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
-// mismatches on `receipt.parse :: success_receipt` were both fixed in the
-// per-SDK protocol-conformance round, so there are no remaining known runner
-// divergences.
-const KNOWN_RUNNER_DIVERGENCES: Record<string, Set<string>> = {};
+// Each entry maps `${op} :: ${scenario}` to the runner's exact response, so the
+// gap fails loudly the moment the SDK's answer changes (mirrors KNOWN_TS_DIVERGENCES).
 
-const runners = discoverProtocolRunners();
+const swiftUnsupported = (op: string, errorType: string, thing: string): AdapterResponse => ({
+  success: false,
+  error: `${op} unsupported: SolanaPayKit has no ${thing}`,
+  error_type: errorType,
+});
+const KNOWN_RUNNER_DIVERGENCES: Record<string, Record<string, AdapterResponse>> = {
+  swift: {
+    "challenge.format :: basic_challenge": swiftUnsupported(
+      "challenge.format",
+      "format_error",
+      "WWW-Authenticate formatter",
+    ),
+    "credential.parse :: basic_credential": swiftUnsupported(
+      "credential.parse",
+      "parse_error",
+      "Authorization parser",
+    ),
+    "receipt.parse :: success_receipt": swiftUnsupported(
+      "receipt.parse",
+      "parse_error",
+      "Payment-Receipt parser",
+    ),
+    "base64url.encode :: empty_string": swiftUnsupported(
+      "base64url.encode",
+      "encoding_error",
+      "public base64url encoder",
+    ),
+    "base64url.decode :: empty_string": swiftUnsupported(
+      "base64url.decode",
+      "encoding_error",
+      "public base64url decoder",
+    ),
+    "challenge.id :: required_fields_only": swiftUnsupported(
+      "challenge.id",
+      "generation_error",
+      "challenge-id generator",
+    ),
+  },
+};
+
+describe("mpp-protocol conformance (spawned runner failure)", () => {
+  it("a missing swift executable matches no known swift divergence", async () => {
+    const adapter = spawnedProtocolAdapter({
+      language: "swift",
+      command: ["mpp-protocol-runner-missing"],
+      cwd: process.cwd(),
+    });
+    const response = await adapter.runProtocolRequest({ op: "challenge.format", input: {} });
+    expect(response).toMatchObject({ success: false, error_type: "runner_error" });
+    expect(Object.values(KNOWN_RUNNER_DIVERGENCES.swift)).not.toContainEqual(response);
+  });
+});
+
+const allowlist = parseLanguageAllowlist(process.env.MPP_CONFORMANCE_LANGUAGES);
+const runners = discoverProtocolRunners().filter(
+  (runner) => !allowlist || allowlist.has(runner.language),
+);
 for (const runner of runners) {
-  const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? new Set<string>();
+  const known = KNOWN_RUNNER_DIVERGENCES[runner.language] ?? {};
   describe(`mpp-protocol conformance (spawned ${runner.language} runner)`, () => {
     const adapter = spawnedProtocolAdapter(runner);
     for (const testCase of smokeCases) {
       if (!caseRunsOnAdapter(testCase, runner.language)) continue;
       const key = `${testCase.op} :: ${testCase.scenario}`;
-      if (known.has(key)) {
+      if (key in known) {
         it(`KNOWN DIVERGENCE: ${key}`, async () => {
-          const result = await runCase(adapter, testCase);
+          const response = await adapter.runProtocolRequest({ op: testCase.op, input: testCase.input });
           expect(
-            result.ok,
-            `${key} now conforms — remove from KNOWN_RUNNER_DIVERGENCES[${runner.language}]`,
-          ).toBe(false);
+            response,
+            `${key} changed — update or remove KNOWN_RUNNER_DIVERGENCES[${runner.language}]`,
+          ).toEqual(known[key]);
         });
         continue;
       }
