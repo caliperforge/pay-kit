@@ -106,6 +106,62 @@ final readonly class Config
         $this->mpp         = $resolvedMpp;
     }
 
+    public static function fromEnv(string $prefix = 'PAY_KIT_'): self
+    {
+        $env = static function (string $name) use ($prefix): ?string {
+            $raw = getenv($prefix . $name);
+            return $raw === false || trim($raw) === '' ? null : trim($raw);
+        };
+
+        $args = [
+            'rpcUrl'   => $env('RPC_URL'),
+            'operator' => new Operator(
+                recipient: $env('OPERATOR_RECIPIENT'),
+                signer:    Signer::env($prefix . 'OPERATOR_KEY'),
+            ),
+            'x402'     => new X402Config(facilitatorUrl: $env('X402_FACILITATOR_URL')),
+            'mpp'      => new MppConfig(
+                realm:                  $env('MPP_REALM'),
+                challengeBindingSecret: $env('MPP_CHALLENGE_BINDING_SECRET'),
+                expiresIn:              MppConfig::resolveExpiresIn($env('MPP_EXPIRES_IN')),
+            ),
+        ];
+        if (($network = $env('NETWORK')) !== null) {
+            $args['network'] = Network::tryFrom($network) ?? throw new ConfigurationException(
+                sprintf('pay_kit: %sNETWORK has unknown value "%s"', $prefix, $network),
+            );
+        }
+        if (($accept = $env('ACCEPT')) !== null) {
+            $args['accept'] = self::enumList(Protocol::class, $accept, $prefix . 'ACCEPT');
+        }
+        if (($stablecoins = $env('STABLECOINS')) !== null) {
+            $args['stablecoins'] = self::enumList(Stablecoin::class, $stablecoins, $prefix . 'STABLECOINS');
+        }
+        if (($preflight = $env('PREFLIGHT')) !== null) {
+            $args['preflight'] = filter_var($preflight, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                ?? throw new ConfigurationException(
+                    sprintf('pay_kit: %sPREFLIGHT is not a boolean: "%s"', $prefix, $preflight),
+                );
+        }
+
+        return new self(...$args);
+    }
+
+    /**
+     * @template T of \BackedEnum
+     * @param class-string<T> $enum
+     * @return list<T>
+     */
+    private static function enumList(string $enum, string $raw, string $var): array
+    {
+        return array_map(
+            static fn (string $item): \BackedEnum => $enum::tryFrom(trim($item)) ?? throw new ConfigurationException(
+                sprintf('pay_kit: %s has unknown entry "%s"', $var, trim($item)),
+            ),
+            explode(',', $raw),
+        );
+    }
+
     /**
      * The operator's recipient pubkey, post-defaults.
      */
