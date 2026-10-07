@@ -3,10 +3,12 @@ local transaction = require('pay_kit.solana.transaction')
 local base58 = require('pay_kit.solana.base58')
 local base64_std = require('pay_kit.util.base64_std')
 
--- Helper: build a minimal legacy transaction wire payload with one signature,
--- one account key, the System Program implicit recipient, a known blockhash,
--- and one zero-byte instruction. This mirrors the shape Solana's SDK emits.
-local function build_legacy_fixture()
+-- Helper: build a minimal transaction wire payload with one signature, one
+-- account key, the System Program implicit recipient, a known blockhash, and
+-- one zero-byte instruction. `versioned` selects the v0 framing (0x80 prefix
+-- plus an empty address-table-lookup vector) every client emits; the legacy
+-- framing is what a pre-cutover client sends, and the codec accepts both.
+local function build_fixture(versioned)
   local signature = string.rep('\x11', 64)
   local fee_payer = string.rep('\xa1', 32)
   local recipient = string.rep('\xb2', 32)
@@ -15,6 +17,7 @@ local function build_legacy_fixture()
   -- unsigned), 2 account keys, blockhash, 1 instruction referencing program
   -- id index 1 with empty accounts and empty data.
   local message = table.concat({
+    versioned and string.char(0x80) or '',  -- v0 marker
     string.char(1, 0, 1),         -- header
     transaction.compact_u16(2),    -- 2 account keys
     fee_payer,
@@ -24,6 +27,7 @@ local function build_legacy_fixture()
     string.char(1),                -- program_id_index
     transaction.compact_u16(0),    -- 0 accounts
     transaction.compact_u16(0),    -- 0 data bytes
+    versioned and transaction.compact_u16(0) or '',  -- 0 address-table lookups
   })
   local raw = table.concat({
     transaction.compact_u16(1),    -- 1 signature
@@ -40,12 +44,26 @@ local function build_legacy_fixture()
   }
 end
 
-helper.test('transaction.from_bytes parses a minimal legacy fixture', function()
-  local fixture = build_legacy_fixture()
+local function build_v0_fixture() return build_fixture(true) end
+
+helper.test('transaction.from_bytes parses a minimal legacy (unprefixed) fixture', function()
+  local fixture = build_fixture(false)
+  local tx = transaction.from_bytes(fixture.raw)
+  helper.assert_equal(tx.version, 'legacy')
+  helper.assert_equal(#tx.signatures, 1)
+  helper.assert_equal(tx.message.account_keys[1], fixture.fee_payer)
+  helper.assert_equal(#tx.message.instructions, 1)
+  helper.assert_equal(#tx.message.address_table_lookups, 0)
+  helper.assert_equal(transaction.to_bytes(tx), fixture.raw)
+  helper.assert_equal(transaction.to_bytes(transaction.from_base64(base64_std.encode(fixture.raw))), fixture.raw)
+end)
+
+helper.test('transaction.from_bytes parses a minimal v0 fixture', function()
+  local fixture = build_v0_fixture()
   local tx = transaction.from_bytes(fixture.raw)
   helper.assert_equal(#tx.signatures, 1)
   helper.assert_equal(tx.signatures[1], fixture.signature)
-  helper.assert_equal(tx.version, 'legacy')
+  helper.assert_equal(tx.version, 0)
   helper.assert_equal(tx.message.header.required_signatures, 1)
   helper.assert_equal(tx.message.account_keys[1], fixture.fee_payer)
   helper.assert_equal(tx.message.account_keys[2], fixture.recipient)
@@ -55,14 +73,23 @@ helper.test('transaction.from_bytes parses a minimal legacy fixture', function()
   helper.assert_equal(#tx.message.address_table_lookups, 0)
 end)
 
-helper.test('transaction.to_bytes round-trips a legacy fixture', function()
-  local fixture = build_legacy_fixture()
+helper.test('transaction.from_bytes rejects trailing bytes after either message framing', function()
+  for _, versioned in ipairs({ true, false }) do
+    local fixture = build_fixture(versioned)
+    local ok, err = pcall(transaction.from_bytes, fixture.raw .. '\0')
+    helper.assert_true(not ok, 'trailing bytes must be rejected')
+    helper.assert_true(tostring(err):find('trailing bytes after transaction message', 1, true), tostring(err))
+  end
+end)
+
+helper.test('transaction.to_bytes round-trips a v0 fixture', function()
+  local fixture = build_v0_fixture()
   local tx = transaction.from_bytes(fixture.raw)
   helper.assert_equal(transaction.to_bytes(tx), fixture.raw)
 end)
 
 helper.test('transaction.from_base64 decodes the standard-alphabet payload', function()
-  local fixture = build_legacy_fixture()
+  local fixture = build_v0_fixture()
   local encoded = base64_std.encode(fixture.raw)
   local tx = transaction.from_base64(encoded)
   helper.assert_equal(transaction.to_base64(tx), encoded)
@@ -112,7 +139,7 @@ helper.test('transaction.compact_u16 round-trips known small and large values', 
 end)
 
 helper.test('transaction.replace_signature swaps one signature slot in place', function()
-  local fixture = build_legacy_fixture()
+  local fixture = build_v0_fixture()
   local tx = transaction.from_bytes(fixture.raw)
   local fresh = string.rep('\xee', 64)
   transaction.replace_signature(tx, 1, fresh)
@@ -123,7 +150,7 @@ helper.test('transaction.replace_signature swaps one signature slot in place', f
 end)
 
 helper.test('transaction.index_of_account returns the matching account index', function()
-  local fixture = build_legacy_fixture()
+  local fixture = build_v0_fixture()
   local tx = transaction.from_bytes(fixture.raw)
   helper.assert_equal(transaction.index_of_account(tx, fixture.fee_payer), 1)
   helper.assert_equal(transaction.index_of_account(tx, fixture.recipient), 2)

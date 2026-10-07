@@ -1,4 +1,5 @@
 import { DEFAULT_RPC_URLS } from '@solana/mpp';
+import type { PendingSettlementStore } from '@x402/core/facilitator';
 import type { Store } from 'mppx';
 
 import { ConfigurationError, DemoSignerOnMainnetError, ProtocolNotSupportedError } from './errors.js';
@@ -27,9 +28,10 @@ export type MppOptions = {
 };
 
 /**
- * x402 options forwarded to the vendored exact-scheme facilitator; omitted
- * fields use upstream defaults. Smart-wallet (Path 2) verification needs an
- * RPC whose `simulateTransaction` returns inner instructions.
+ * x402 options forwarded to the vendored exact-scheme facilitator (and, where
+ * the option exists there too, the upto facilitator); omitted fields use
+ * upstream defaults. Smart-wallet (Path 2) verification needs an RPC whose
+ * `simulateTransaction` returns inner instructions.
  */
 export type X402Options = {
     readonly enableSmartWalletVerification?: boolean;
@@ -46,6 +48,14 @@ export type X402Options = {
      * of base fee. A typical payment needs two. Default: unset (no limit).
      */
     readonly maxRequiredSignatures?: number;
+    /**
+     * Lets a retried settle for the same transaction reconcile against an
+     * already-broadcast signature instead of re-verifying and re-sending.
+     * Forwarded to both the `exact` and `upto` facilitators. Default: an
+     * in-memory store per facilitator instance. Inject a shared,
+     * network-backed implementation for multi-replica deployments.
+     */
+    readonly pendingSettlementStore?: PendingSettlementStore;
     readonly smartWalletAllowedPrograms?: readonly string[];
     readonly smartWalletMaxComputeUnits?: number;
     readonly smartWalletMaxPriorityFeeMicroLamports?: number;

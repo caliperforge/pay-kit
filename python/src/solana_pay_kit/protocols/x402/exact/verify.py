@@ -106,6 +106,8 @@ class ExactVerifier:
                 code="invalid_exact_svm_payload_base64",
             )
 
+        # ``from_bytes`` dispatches on the message-version prefix: legacy and
+        # v0 wires both decode and are held to the same static layout.
         try:
             tx = VersionedTransaction.from_bytes(raw)
         except Exception as exc:  # noqa: BLE001

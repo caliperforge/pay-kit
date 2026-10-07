@@ -8,6 +8,30 @@ import {
     type TransactionPartialSigner,
 } from '@solana/kit';
 
+/** Rejection text when `getTransaction` omits `version`; shared verbatim with the Rust kit. */
+export const MISSING_TRANSACTION_VERSION_ERROR = 'RPC did not report the transaction version';
+
+/** Versions the servers accept on RPC read-back: 0 and 1, plus legacy policed as 0. */
+const ACCEPTED_TRANSACTION_VERSIONS: readonly number[] = [0, 1];
+
+/**
+ * Version policy for a transaction read back from the RPC by signature.
+ * `maxSupportedTransactionVersion` only bounds what the node returns; the
+ * server still applies the same policy as at the decode boundary: version 0,
+ * version 1 and legacy (unversioned, policed as version 0, kept for existing
+ * clients) are accepted. A missing version is refused, since nodes report one
+ * for every transaction once asked.
+ */
+export function assertReportedTransactionVersion(version: unknown): void {
+    if (version === 'legacy') return;
+    if (version === undefined || version === null) throw new Error(MISSING_TRANSACTION_VERSION_ERROR);
+    if (typeof version !== 'number' || !ACCEPTED_TRANSACTION_VERSIONS.includes(version)) {
+        throw new Error(
+            `transaction version ${JSON.stringify(version)} is not accepted; accepted versions: ${ACCEPTED_TRANSACTION_VERSIONS.join(', ')}`,
+        );
+    }
+}
+
 /** Return the deterministic transaction signature from a base64 wire transaction. */
 export function transactionSignatureFromBase64(transaction: string): Signature {
     return getSignatureFromTransaction(getTransactionDecoder().decode(getBase64Codec().encode(transaction)));

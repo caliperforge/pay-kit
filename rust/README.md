@@ -174,6 +174,41 @@ Payment` credential, decodes the client-signed transaction and checks recipient,
 amount, mint, splits, ATA, memos, and compute budget, optionally co-signs as fee
 payer, broadcasts, polls to `confirmed`, and emits `Payment-Receipt`.
 
+### MCP with `rmcp`
+
+Enable the `rmcp` feature to use the Payment Auth MCP transport with the
+official Rust MCP SDK. The adapter reads payment credentials from the metadata
+that `rmcp` places on `RequestContext`, returns the standard JSON-RPC `-32042`
+or `-32043` payment errors, and attaches the receipt to the normal tool result:
+
+```rust
+use rmcp::{
+    model::{CallToolRequestParams, CallToolResult, ErrorCode},
+    service::{RequestContext, RoleServer},
+    ErrorData,
+};
+use solana_pay_kit::mpp::{mcp::rmcp as payment_mcp, server::Mpp};
+
+async fn paid_tool(
+    payment: &Mpp,
+    request: CallToolRequestParams,
+    context: RequestContext<RoleServer>,
+) -> Result<CallToolResult, ErrorData> {
+    let receipt = payment_mcp::gate_charge(payment, &request, &context.meta, "0.001").await?;
+
+    let mut result = CallToolResult::success(vec![]);
+    payment_mcp::attach_receipt(&mut result, &receipt).map_err(|error| {
+        ErrorData::new(ErrorCode::INTERNAL_ERROR, error.to_string(), None)
+    })?;
+    Ok(result)
+}
+```
+
+Client code can use `payment_mcp::challenges`, `set_credential`, and `receipt`
+to implement the challenge, paid retry, and receipt flow with `rmcp` request and
+result types. The transport-neutral `mpp::mcp` module also exposes the same
+native-JSON mapping for custom MCP runtimes and session lifecycle handlers.
+
 ## x402
 
 [x402](https://x402.org) revives HTTP `402 Payment Required`. The Rust
@@ -198,26 +233,66 @@ signs a cumulative voucher per request, which the gate (`paid_batch_get` /
 `paid_batch_post`) verifies off-chain and serves immediately. The operator
 redeems vouchers on-chain later in batches via `pay.x402_batch()` (`claim`,
 `settle`, `finalize_close`, and `reclaim`). It also needs a `fee_payer_signer`.
+The client can also use upstream's server-signed (operator-metered) mode, but
+only through an explicit `ServerSignedChannelsPolicy` that allowlists the
+operator and caps its total channel escrow; the bundled server currently offers
+client-signed vouchers. When a payer force-closes a channel,
+`finalize_close` applies the server's latest voucher with `settle_and_seal`
+during the grace period rather than forfeiting it, then finalizes
+permissionlessly once the grace period has run out.
 
 ## Client
 
-Unlike the Ruby, Python, PHP, and Lua SDKs (server-only), Rust also ships the
-paying side, via the protocol-layer crate re-exported at `solana_pay_kit::mpp`:
+Rust ships a high-level HTTP client that detects MPP and x402 challenges,
+checks one shared permission policy, signs a permitted payment, and retries the
+request once. Enable the `client`, `mpp`, and `x402` features:
 
 ```rust
-use solana_pay_kit::mpp::client::{build_credential_header, parse_challenge};
+use solana_pay_kit::client::{
+    ClientPermissions, ClientProtocol, OriginPermissionOverride, PayKitClient,
+    SolanaNetwork,
+};
 use solana_pay_kit::solana_keychain::memory::MemorySigner;
-use solana_pay_kit::mpp::solana_rpc_client::rpc_client::RpcClient;
 
-// 1. Read the 402 challenge from the WWW-Authenticate header.
-let challenge = parse_challenge(www_authenticate_header)?;
-// 2. Sign a payment for it and replay the request with the credential.
-let authorization = build_credential_header(&signer, &rpc, &challenge).await?;
+let permissions = ClientPermissions::builder()
+    .allow_origin("https://api.example.com")?
+    .only_network(SolanaNetwork::Mainnet)
+    .max_amount_per_payment("$1.00".parse()?)
+    .override_origin(
+        OriginPermissionOverride::builder("https://api.example.com")
+            .max_amount_per_payment("$5.00".parse()?)
+            .build()?,
+    )
+    .build()?;
+
+let client = PayKitClient::builder()
+    .signer(MemorySigner::from_bytes(&payer_keypair)?)
+    .rpc_url("https://api.mainnet-beta.solana.com")
+    .network(SolanaNetwork::Mainnet)
+    .accept([ClientProtocol::Mpp, ClientProtocol::X402])
+    .permissions(permissions)
+    .build()?;
+
+let response = client
+    .get("https://api.example.com/report")
+    .send()
+    .await?;
 ```
 
-`build_charge_transaction_with_options` adds auto-pay guardrails — a spending
-cap (`max_amount_base_units`), an expected-network pin, and a refusal to sign
-unknown Token-2022 mints unless opted in.
+Caps are global by default and can be replaced for an exact origin. The default
+policy allows known stablecoins on the configured network up to USD 1.00 per
+payment; unknown mints require an explicit asset permission. Permission checks
+run before transaction construction and wallet invocation. The high-level
+client currently handles MPP charge and x402 exact offers; stateful x402
+`upto` and `batch-settlement` clients remain available through `x402::client`.
+
+The lower-level protocol APIs remain public for callers that manage HTTP
+themselves. For example, MPP exposes `parse_challenge` and
+`build_credential_header`, while `build_charge_transaction_with_options` keeps
+its amount, network, and Token-2022 guardrails.
+
+See [the permission architecture](https://github.com/solana-foundation/pay-kit/blob/main/docs/client-permissions-design.md)
+for cap precedence, defaults, and the proposed TypeScript counterpart.
 
 ---
 
@@ -287,7 +362,8 @@ let signer = MemorySigner::from_bytes(&secret_key_bytes)?; // 64-byte keypair
 
 Set `fee_payer_signer` on `PayKitConfig` to sponsor the network fee — one key
 drives MPP fee-sponsored mode and supplies x402's fee-payer address. The
-`gcp_kms` feature wires the GCP KMS backend.
+`gcp_kms` feature wires the GCP KMS backend and `ledger` the Ledger USB-HID
+backend.
 
 ---
 
@@ -299,6 +375,9 @@ solana-pay-kit = { version = "0.1", features = ["axum"] }
 
 # Single protocol:
 solana-pay-kit = { version = "0.1", default-features = false, features = ["mpp"] }
+
+# Payment Auth MCP transport with the official Rust MCP SDK:
+solana-pay-kit = { version = "0.1", default-features = false, features = ["rmcp"] }
 ```
 
 Feature flags:
@@ -310,7 +389,9 @@ Feature flags:
 | `server` | — | server-side verification for the enabled protocols |
 | `client` | — | client-side payment building for the enabled protocols |
 | `axum` | — | the `paid_get` / `paid_post` gate (implies `server` + both protocols) |
+| `rmcp` | — | Payment Auth MCP adapters for the official Rust MCP SDK (implies `mpp` + `server`) |
 | `gcp_kms` | — | GCP KMS signing backend |
+| `ledger` | — | Ledger hardware-wallet signing over USB-HID (`solana_keychain::ledger`; links hidapi) |
 
 ## Test
 

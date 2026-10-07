@@ -178,35 +178,21 @@ def _decode_transaction(transaction_b64: str) -> tuple[bytes, Any, list[str], li
     instructions, signatures)`` as base58 strings / compiled-instruction
     objects.
 
-    A v0 transaction that references address lookup tables is rejected: the
-    open verifier only sees the static account keys, so an ALT could hide the
+    ``VersionedTransaction.from_bytes`` dispatches on the message-version
+    prefix, so a pre-cutover client's legacy wire decodes alongside v0. A v0
+    transaction that references address lookup tables is rejected: the open
+    verifier only sees the static account keys, so an ALT could hide the
     accounts it validates. See :func:`_reject_address_lookup_tables`.
     """
-    from solders.transaction import Transaction, VersionedTransaction
-
-    from solana_pay_kit._paycore.transaction import is_v0_wire_bytes
+    from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64, validate=True)
-    message = None
-    signatures: list = []
-    if is_v0_wire_bytes(raw):
-        vtx = VersionedTransaction.from_bytes(raw)
-        message = vtx.message
-        _reject_address_lookup_tables(message)
-        signatures = list(vtx.signatures)
-    else:
-        try:
-            tx = Transaction.from_bytes(raw)
-            message = tx.message
-            signatures = list(tx.signatures)
-        except Exception:
-            vtx = VersionedTransaction.from_bytes(raw)
-            message = vtx.message
-            _reject_address_lookup_tables(message)
-            signatures = list(vtx.signatures)
+    vtx = VersionedTransaction.from_bytes(raw)
+    message = vtx.message
+    _reject_address_lookup_tables(message)
     account_keys = [str(key) for key in message.account_keys]
     instructions = list(message.instructions)
-    return raw, message, account_keys, instructions, signatures
+    return raw, message, account_keys, instructions, list(vtx.signatures)
 
 
 def top_up_transaction_signature(transaction_b64: str) -> str | None:
@@ -227,12 +213,11 @@ def top_up_transaction_signature(transaction_b64: str) -> str | None:
 
 
 def _signed_message_bytes(message: Any) -> bytes:
-    """Return the exact legacy or versioned bytes covered by signatures."""
-    from solders.message import MessageV0, to_bytes_versioned  # type: ignore[import-untyped]
+    """Return the exact bytes covered by signatures: ``0x80`` prefix + body
+    for v0, the bare message for legacy."""
+    from solders.message import to_bytes_versioned  # type: ignore[import-untyped]
 
-    if isinstance(message, MessageV0):
-        return bytes(to_bytes_versioned(message))
-    return bytes(message)
+    return bytes(to_bytes_versioned(message))
 
 
 async def verify_open_tx(

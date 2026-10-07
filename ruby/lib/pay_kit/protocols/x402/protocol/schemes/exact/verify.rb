@@ -53,11 +53,15 @@ module PayKit::Protocols::X402
             raise "invalid_exact_svm_payload_signature" if message_offset >= bytes.bytesize
 
             message = bytes.byteslice(message_offset, bytes.bytesize - message_offset)
-            raise "invalid_exact_svm_payload_signature" unless message.getbyte(0) == 0x80
+            header = begin
+              Exact.message_header_offset(message)
+            rescue RuntimeError
+              raise "invalid_exact_svm_payload_signature"
+            end
 
-            required_signatures = message.getbyte(1)
+            required_signatures = message.getbyte(header)
             raise "invalid_exact_svm_payload_signature" if required_signatures > signature_count
-            account_count, account_offset = Exact.read_short_vec(message, 4)
+            account_count, account_offset = Exact.read_short_vec(message, header + 3)
             raise "invalid_exact_svm_payload_signature" if required_signatures > account_count
 
             zero_signature = "\x00".b * 64

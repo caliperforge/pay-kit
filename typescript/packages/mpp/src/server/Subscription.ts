@@ -37,7 +37,11 @@ import {
     deriveSubscriptionPda,
     mapSubscriptionPeriodToHours,
 } from '../shared/subscription.js';
-import { coSignBase64Transaction, transactionSignatureFromBase64 } from '../utils/transactions.js';
+import {
+    assertReportedTransactionVersion,
+    coSignBase64Transaction,
+    transactionSignatureFromBase64,
+} from '../utils/transactions.js';
 import { claimReplayKey, confirmReplayKey, inspectReplayKey, reserveReplayKey } from './replay.js';
 
 /**
@@ -480,6 +484,7 @@ async function settleActivation(
     }
     const tx = await fetchTransactionRaw(rpcUrl, signature);
     if (!tx) throw new Error('Transaction not found or not yet confirmed');
+    assertReportedTransactionVersion(tx.version);
     if (tx.meta?.err) throw new Error('Transaction failed on-chain');
     const [transactionBase64] = tx.transaction;
     const subscriber = extractSubscriberFromTransaction(transactionBase64, challenge);
@@ -665,6 +670,8 @@ function decodeCompiledMessage(clientTxBase64: string): CompiledMessage {
     try {
         const txBytes = getBase64Codec().encode(clientTxBase64);
         const decoded = getTransactionDecoder().decode(txBytes);
+        // The kit decoder dispatches on the version prefix byte, so legacy
+        // and v0 messages both decode to this shape.
         const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes) as unknown as Omit<
             CompiledMessage,
             'signerAccounts'
@@ -989,6 +996,7 @@ function base64UrlEncodeNoPadding(bytes: Uint8Array): string {
 type RawTransaction = {
     meta: { err: unknown } | null;
     transaction: [string, 'base64'];
+    version?: unknown;
 };
 
 async function fetchTransactionRaw(rpcUrl: string, signature: string): Promise<RawTransaction | null> {
@@ -997,7 +1005,7 @@ async function fetchTransactionRaw(rpcUrl: string, signature: string): Promise<R
             id: 1,
             jsonrpc: '2.0',
             method: 'getTransaction',
-            params: [signature, { commitment: 'confirmed', encoding: 'base64', maxSupportedTransactionVersion: 0 }],
+            params: [signature, { commitment: 'confirmed', encoding: 'base64', maxSupportedTransactionVersion: 1 }],
         }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',

@@ -75,6 +75,24 @@ func TestVerifyChargeTransactionPreBroadcastRejectsUndecodableTransaction(t *tes
 	}
 }
 
+// A legacy (unprefixed) message is verified under the same rules as v0.
+func TestVerifyChargeTransactionPreBroadcastAcceptsLegacyTransaction(t *testing.T) {
+	payer := testutil.NewPrivateKey()
+	recipient := testutil.NewPrivateKey().PublicKey()
+
+	_, tx := encodePreBroadcastSOLTransfer(t, payer, recipient, 1000)
+	tx.Message.SetVersion(solana.MessageVersionLegacy)
+	encoded, err := solanatx.EncodeTransactionBase64(tx)
+	if err != nil {
+		t.Fatalf("encode legacy transaction failed: %v", err)
+	}
+	request := intents.ChargeRequest{Amount: "1000", Currency: "sol", Recipient: recipient.String()}
+
+	if err := VerifyChargeTransactionPreBroadcast(encoded, request, paycore.MethodDetails{}, "localnet"); err != nil {
+		t.Fatalf("expected legacy SOL transfer to pass pre-broadcast verify: %v", err)
+	}
+}
+
 func TestVerifyChargeTransactionPreBroadcastRejectsAddressLookupTables(t *testing.T) {
 	payer := testutil.NewPrivateKey()
 	recipient := testutil.NewPrivateKey().PublicKey()

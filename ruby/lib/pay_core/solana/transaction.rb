@@ -8,7 +8,9 @@ require_relative "public_key"
 module PayCore
   module Solana
     # Parsed legacy or v0 Solana transaction. Owns the binary codec; mirrors
-    # the Rust spine `rust/crates/core/src/solana/transaction.rs`.
+    # the Rust spine `rust/crates/core/src/solana/transaction.rs`. Clients
+    # only build v0, but servers keep accepting a pre-cutover client's legacy
+    # (unprefixed) message and police it under the v0 rules.
     #
     # `sign_with` raises `PayCore::Solana::Transaction::SigningError` by
     # default. Higher layers (solana-mpp, solana-x402) may subclass this
@@ -135,7 +137,7 @@ module PayCore
         @address_table_lookups = address_table_lookups
       end
 
-      # Parse a legacy or v0 transaction message.
+      # Parse a legacy or v0 transaction message; v1 is not implemented.
       def self.parse(raw)
         cursor = Cursor.new(raw)
         version = "legacy"
@@ -156,6 +158,10 @@ module PayCore
         instructions = cursor.compact_u16.times.map { Instruction.parse(cursor) }
         lookups = []
         lookups = cursor.compact_u16.times.map { AddressLookup.parse(cursor) } if version == 0
+        # Canonical encoding only: what the signatures cover is exactly what
+        # re-serializes, so a message followed by stray bytes is malformed.
+        raise ArgumentError, "trailing bytes after transaction message" if cursor.offset < raw.bytesize
+
         new(
           raw: raw,
           version: version,

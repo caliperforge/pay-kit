@@ -534,7 +534,10 @@ pub struct ChannelLifecycle {
 /// re-encode + CAS write would destroy them for every reader. Unknown fields
 /// at the same or an older version round-trip verbatim through
 /// [`ChannelState::extra`] instead.
-pub const CHANNEL_STATE_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 adds policy-scoped MPP open intents. Older request servers must
+/// reject these records rather than authorize them without the policy guard.
+pub const CHANNEL_STATE_SCHEMA_VERSION: u32 = 2;
 
 /// Persisted state of a payment channel, managed by the server.
 ///
@@ -579,6 +582,16 @@ pub struct ChannelState {
     /// Unix timestamp (seconds) when cooperative close was requested.
     /// Once set, no further vouchers are accepted.
     pub close_requested_at: Option<u64>,
+
+    /// The amount the close finalizer chose to seal the channel at, recorded
+    /// in the same atomic transition that chose it. Once set, the watermark
+    /// is frozen: [`ChannelState::commit_authorization`] refuses every further
+    /// charge, because a seal carrying this amount may already be in flight
+    /// and nothing above it could ever be redeemed.
+    ///
+    /// The Serde default keeps existing persisted channel records readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_cumulative: Option<u64>,
 
     /// Slot at which the channel was opened, when known.
     ///
@@ -950,6 +963,27 @@ impl ChannelState {
                     "authorization {authorization_id} is no longer reserved"
                 ))
             })?;
+        // The counterpart of `has_blocking_authorization`: once the finalizer
+        // has chosen the amount to seal at (`freeze_watermark_at`), or the
+        // seal has landed, the watermark is frozen and a charge written now
+        // could never be redeemed. Both transitions happen on this record
+        // under the store's per-channel atomicity, so a commit either lands
+        // before the choice and is included in it, or finds the fence and is
+        // refused — however long its store call was delayed in between. The
+        // request was served and the operator forfeits the charge; the
+        // reservation lease exists to keep a handler inside the window where
+        // its charge can still be applied.
+        if self.sealed {
+            return Err(StoreError::Internal(format!(
+                "authorization {authorization_id} cannot be charged: the channel is sealed"
+            )));
+        }
+        if let Some(fence) = self.final_cumulative {
+            return Err(StoreError::Internal(format!(
+                "authorization {authorization_id} cannot be charged: the channel's final \
+                 watermark is fixed at {fence} for sealing"
+            )));
+        }
         if cumulative < self.cumulative {
             return Err(StoreError::Internal(format!(
                 "authorization {authorization_id} would lower the watermark from {} to {cumulative}",
@@ -1029,6 +1063,40 @@ impl ChannelState {
     /// to be served a second time.
     pub fn has_in_flight_authorization(&self) -> bool {
         self.pending_setup.is_some() || !self.pending_deliveries.is_empty()
+    }
+
+    /// Whether reserved work could still reach an outcome a close finalizer
+    /// should wait for before sealing the channel.
+    ///
+    /// A reservation whose lease is still running may commit its charge, so
+    /// sealing under it would strand that charge. A lease that has run out
+    /// belongs to a request whose owner crashed or overran; nobody else ever
+    /// takes it over or releases it (see [`Self::reserve_authorization`]), so
+    /// waiting on it would block the seal forever, so it is treated as gone.
+    /// The finalizer records its choice with [`Self::freeze_watermark_at`] in
+    /// the same transition that consults this, and
+    /// [`Self::commit_authorization`] refuses a fenced record, so a request
+    /// that outlived its lease is either included in the seal or refused —
+    /// never charged behind it.
+    pub fn has_blocking_authorization(&self, now: i64) -> bool {
+        let live = |expires_at: i64| expires_at > now;
+        self.pending_setup
+            .as_ref()
+            .is_some_and(|setup| live(setup.expires_at))
+            || self
+                .pending_deliveries
+                .iter()
+                .any(|delivery| live(delivery.expires_at))
+    }
+
+    /// Record that the close finalizer will seal this channel carrying
+    /// `cumulative`, so no later commit can advance the watermark past what
+    /// the seal redeems. Must be called in the same atomic store transition
+    /// that chose the amount. A later pass may revise the amount (an early
+    /// seal that failed to land becomes a frozen seal after the deadline);
+    /// the fence itself is never lifted.
+    pub fn freeze_watermark_at(&mut self, cumulative: u64) {
+        self.final_cumulative = Some(cumulative);
     }
 
     /// Drop the expired committed prefix, then bound the committed tail to
@@ -1126,10 +1194,10 @@ pub trait ChannelStore: Send + Sync {
     ///
     /// The `updater` closure receives the current state (None if absent) and
     /// returns the new state or an error. Implementations MUST guarantee the
-    /// entire modifying read-modify-write is atomic — no concurrent update can
-    /// interleave. If the updater returns the state unchanged, implementations
-    /// may skip the write and return the snapshot originally passed to the
-    /// updater; that snapshot can be stale if another writer commits afterward.
+    /// entire read-modify-write is atomic, including unchanged results. A
+    /// lock-based store must hold the lock through the updater; an optimistic
+    /// store must validate the observed state with CAS even for a no-op, and
+    /// report a conflict rather than succeed with an invalidated snapshot.
     fn update_channel(
         &self,
         channel_id: &str,
@@ -1901,9 +1969,6 @@ impl ChannelStore for RedisChannelStore {
             let current = current_raw.as_deref().map(Self::decode).transpose()?;
             let new_state = updater(current)?;
             let (new_raw, new_state) = Self::encode_for_write(new_state)?;
-            if current_raw.as_deref() == Some(new_raw.as_str()) {
-                return Ok(new_state);
-            }
             if !self
                 .compare_and_set(&channel_id, current_raw.as_deref(), &new_raw)
                 .await?
@@ -1949,9 +2014,6 @@ impl ChannelStore for RedisChannelStore {
             };
             mutator(&mut state)?;
             let (new_raw, _) = Self::encode_for_write(state)?;
-            if current_raw.as_deref() == Some(new_raw.as_str()) {
-                return Ok(());
-            }
             if !self
                 .compare_and_set(&channel_id, current_raw.as_deref(), &new_raw)
                 .await?
@@ -2306,6 +2368,7 @@ mod tests {
             highest_voucher_signature: None,
             highest_voucher_expires_at: None,
             close_requested_at: None,
+            final_cumulative: None,
             open_slot: None,
             payer: String::new(),
             rent_payer: String::new(),
@@ -2752,6 +2815,96 @@ mod tests {
 
     #[cfg(feature = "redis-store")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redis_channel_store_fences_unchanged_and_changed_mutations() {
+        let redis_url = std::env::var("PAY_KIT_TEST_REDIS_URL")
+            .expect("PAY_KIT_TEST_REDIS_URL is required for the Redis integration test");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let store = RedisChannelStore::connect(
+            &redis_url,
+            format!("pay-kit:test:fenced:{}:{unique}", std::process::id()),
+        )
+        .await
+        .unwrap();
+
+        for in_place in [false, true] {
+            for changed in [false, true] {
+                for concurrent in [false, true] {
+                    let id = format!("{in_place}-{changed}-{concurrent}");
+                    store
+                        .put_channel(&id, make_state(&id, 1_000_000))
+                        .await
+                        .unwrap();
+                    let worker_store = store.clone();
+                    let worker_id = id.clone();
+                    let (read_tx, read_rx) = tokio::sync::oneshot::channel();
+                    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+                    let worker = tokio::spawn(async move {
+                        let mutate = move |state: &mut ChannelState| {
+                            read_tx.send(()).unwrap();
+                            // Pause after GET and before CAS, without blocking
+                            // the runtime needed by the competing writer.
+                            tokio::task::block_in_place(|| {
+                                resume_rx.recv_timeout(Duration::from_secs(10))
+                            })
+                            .unwrap();
+                            if changed {
+                                state.cumulative = 50;
+                            }
+                            Ok(())
+                        };
+                        if in_place {
+                            worker_store
+                                .mutate_channel(&worker_id, None, Box::new(mutate))
+                                .await
+                        } else {
+                            worker_store
+                                .update_channel(
+                                    &worker_id,
+                                    Box::new(move |state| {
+                                        let mut state = state.unwrap();
+                                        mutate(&mut state)?;
+                                        Ok(state)
+                                    }),
+                                )
+                                .await
+                                .map(|_| ())
+                        }
+                    });
+                    tokio::time::timeout(Duration::from_secs(10), read_rx)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if concurrent {
+                        store.mark_sealed(&id).await.unwrap();
+                    }
+                    resume_tx.send(()).unwrap();
+                    let result = worker.await.unwrap();
+                    if concurrent {
+                        assert!(matches!(
+                            result,
+                            Err(StoreError::Internal(message))
+                                if message == "Concurrent channel update; retry the request"
+                        ));
+                    } else {
+                        result.unwrap();
+                    }
+                    let persisted = store.get_channel(&id).await.unwrap().unwrap();
+                    assert_eq!(persisted.sealed, concurrent);
+                    assert_eq!(
+                        persisted.cumulative,
+                        if changed && !concurrent { 50 } else { 0 }
+                    );
+                    store.delete_channel(&id).await.unwrap();
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "redis-store")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn redis_channel_store_roundtrip_and_atomic_watermark() {
         let redis_url = std::env::var("PAY_KIT_TEST_REDIS_URL")
             .expect("PAY_KIT_TEST_REDIS_URL is required for the Redis integration test");
@@ -2810,11 +2963,11 @@ mod tests {
             .await
             .unwrap();
         continue_tx.send(()).unwrap();
-        let stale_read = no_op
-            .await
-            .unwrap()
-            .expect("a no-op must not fail because another writer advanced the channel");
-        assert_eq!(stale_read.cumulative, 0);
+        assert!(matches!(
+            no_op.await.unwrap(),
+            Err(StoreError::Internal(message))
+                if message == "Concurrent channel update; retry the request"
+        ));
         assert_eq!(
             store
                 .get_channel("noop-race")

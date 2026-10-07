@@ -23,7 +23,9 @@ use SolanaPhpSdk\Keypair\PublicKey;
 use SolanaPhpSdk\Rpc\Http\HttpClient;
 use SolanaPhpSdk\Rpc\RpcClient;
 use SolanaPhpSdk\Transaction\Message;
+use SolanaPhpSdk\Transaction\MessageV0;
 use SolanaPhpSdk\Transaction\Transaction;
+use SolanaPhpSdk\Transaction\VersionedTransaction;
 
 final class SolanaChargeHandlerTest extends TestCase
 {
@@ -89,7 +91,7 @@ final class SolanaChargeHandlerTest extends TestCase
         $challenge = $challenges->createChallenge($request);
         $credential = new Credential(
             challenge: $challenge->toEcho(),
-            payload: ['type' => 'transaction', 'transaction' => $this->minimalLegacyTransactionBase64()],
+            payload: ['type' => 'transaction', 'transaction' => $this->minimalV0TransactionBase64()],
         );
 
         $http = new FakeJsonRpcHttpClient([
@@ -127,7 +129,7 @@ final class SolanaChargeHandlerTest extends TestCase
         $challenge = $challenges->createChallenge($request);
         $credential = new Credential(
             challenge: $challenge->toEcho(),
-            payload: ['type' => 'transaction', 'transaction' => $this->minimalLegacyTransactionBase64()],
+            payload: ['type' => 'transaction', 'transaction' => $this->minimalV0TransactionBase64()],
         );
 
         $statusEntry = [
@@ -184,6 +186,43 @@ final class SolanaChargeHandlerTest extends TestCase
         self::assertStringContainsString('devnet', $result->body['detail']);
     }
 
+    public function testSettlesALegacyTransactionLikeVersionZero(): void
+    {
+        // A pre-cutover client's legacy (unprefixed) wire is co-signed and
+        // broadcast in its original framing, exactly like a v0 one.
+        $challenges = new ChargeServer(secretKey: 'test-secret-0123456789abcdef-0123456789', realm: 'api');
+        $request = $this->chargeRequest();
+        $challenge = $challenges->createChallenge($request);
+        $credential = new Credential(
+            challenge: $challenge->toEcho(),
+            payload: ['type' => 'transaction', 'transaction' => $this->minimalLegacyTransactionBase64()],
+        );
+
+        $http = new FakeJsonRpcHttpClient([
+            'sendTransaction' => [['result' => 'LegacySignatureFixtureValue']],
+            'getSignatureStatuses' => [[
+                'result' => [
+                    'value' => [[
+                        'slot' => 1,
+                        'confirmationStatus' => 'confirmed',
+                        'err' => null,
+                    ]],
+                ],
+            ]],
+        ]);
+        $handler = $this->handler(
+            challenges: $challenges,
+            rpc: new RpcClient('http://test.invalid', $http),
+            verifier: new AlwaysAcceptVerifier(),
+        );
+
+        $result = $handler->handle($credential->toAuthorizationHeader(), $request);
+
+        self::assertInstanceOf(ChargeSettlement::class, $result);
+        self::assertSame(200, $result->status);
+        self::assertSame('LegacySignatureFixtureValue', $result->signature);
+    }
+
     public function testReturns402WhenBroadcastReportsOnChainFailure(): void
     {
         $challenges = new ChargeServer(secretKey: 'test-secret-0123456789abcdef-0123456789', realm: 'api');
@@ -191,7 +230,7 @@ final class SolanaChargeHandlerTest extends TestCase
         $challenge = $challenges->createChallenge($request);
         $credential = new Credential(
             challenge: $challenge->toEcho(),
-            payload: ['type' => 'transaction', 'transaction' => $this->minimalLegacyTransactionBase64()],
+            payload: ['type' => 'transaction', 'transaction' => $this->minimalV0TransactionBase64()],
         );
 
         $http = new FakeJsonRpcHttpClient([
@@ -247,7 +286,7 @@ final class SolanaChargeHandlerTest extends TestCase
                 'result' => [
                     'slot' => 1,
                     'meta' => ['err' => null],
-                    'transaction' => [$this->minimalLegacyTransactionBase64(), 'base64'],
+                    'transaction' => [$this->minimalV0TransactionBase64(), 'base64'],
                 ],
             ]],
         ]);
@@ -344,14 +383,14 @@ final class SolanaChargeHandlerTest extends TestCase
                     'result' => [
                         'slot' => 1,
                         'meta' => ['err' => null],
-                        'transaction' => [$this->minimalLegacyTransactionBase64(), 'base64'],
+                        'transaction' => [$this->minimalV0TransactionBase64(), 'base64'],
                     ],
                 ],
                 [
                     'result' => [
                         'slot' => 2,
                         'meta' => ['err' => null],
-                        'transaction' => [$this->minimalLegacyTransactionBase64(), 'base64'],
+                        'transaction' => [$this->minimalV0TransactionBase64(), 'base64'],
                     ],
                 ],
             ],
@@ -386,7 +425,7 @@ final class SolanaChargeHandlerTest extends TestCase
                 'result' => [
                     'slot' => 1,
                     'meta' => ['err' => ['InstructionError' => [0, 'Custom']]],
-                    'transaction' => [$this->minimalLegacyTransactionBase64(), 'base64'],
+                    'transaction' => [$this->minimalV0TransactionBase64(), 'base64'],
                 ],
             ]],
         ]);
@@ -416,7 +455,7 @@ final class SolanaChargeHandlerTest extends TestCase
             'getTransaction' => [[
                 'result' => [
                     'slot' => 1,
-                    'transaction' => [$this->minimalLegacyTransactionBase64(), 'base64'],
+                    'transaction' => [$this->minimalV0TransactionBase64(), 'base64'],
                 ],
             ]],
         ]);
@@ -524,7 +563,7 @@ final class SolanaChargeHandlerTest extends TestCase
                 'result' => [
                     'slot' => 1,
                     'meta' => ['err' => null],
-                    'transaction' => $this->minimalLegacyTransactionBase64(),
+                    'transaction' => $this->minimalV0TransactionBase64(),
                 ],
             ]],
         ]);
@@ -601,35 +640,43 @@ final class SolanaChargeHandlerTest extends TestCase
     }
 
     /**
-     * Builds a signed legacy transaction whose 32-byte recentBlockhash
+     * Builds a signed v0 transaction whose 32-byte recentBlockhash
      * base58-encodes to the Surfpool prefix (`SURFNET…`), so the handler's
      * blockhash sanity check fires when run against a non-localnet network.
      */
     private function surfpoolSignedTransactionBase64(): string
     {
         // Base58 string with the Surfpool prefix; 32 raw bytes once decoded.
-        $surfpoolBlockhashBytes = \SolanaPhpSdk\Util\Base58::decode(
-            'SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx191cab2c',
-        );
+        return $this->minimalV0TransactionBase64(Base58::decode('SURFNETxSAFEHASHxxxxxxxxxxxxxxxxxxx191cab2c'));
+    }
+
+    /**
+     * Builds a signed v0 transaction with no instructions, the wire every
+     * pay-kit client emits. The handler re-serializes the transaction with
+     * `verifySignatures = true` before broadcasting, so the fixture must carry
+     * a real signature in the only required slot.
+     */
+    private function minimalV0TransactionBase64(?string $recentBlockhashBytes = null): string
+    {
         $signer = Keypair::generate();
-        $message = new Message(
-            numRequiredSignatures: 1,
-            numReadonlySignedAccounts: 0,
-            numReadonlyUnsignedAccounts: 0,
-            accountKeys: [$signer->getPublicKey()],
-            recentBlockhash: $surfpoolBlockhashBytes,
-            instructions: [],
-        );
-        $tx = new Transaction($message);
+        $message = new MessageV0();
+        $message->numRequiredSignatures = 1;
+        $message->numReadonlySignedAccounts = 0;
+        $message->numReadonlyUnsignedAccounts = 0;
+        $message->staticAccountKeys = [$signer->getPublicKey()];
+        $message->recentBlockhash = Base58::encode($recentBlockhashBytes ?? str_repeat("\x00", 32));
+        $message->compiledInstructions = [];
+        $tx = new VersionedTransaction($message);
         $tx->partialSign($signer);
         return base64_encode($tx->serialize());
     }
 
+    /**
+     * Builds a signed legacy (unprefixed) transaction, as a pre-cutover
+     * client sends; the handler still accepts it.
+     */
     private function minimalLegacyTransactionBase64(): string
     {
-        // The handler re-serializes the transaction with `verifySignatures = true`
-        // before broadcasting, so the fixture must carry a real signature in
-        // the only required slot.
         $signer = Keypair::generate();
         $message = new Message(
             numRequiredSignatures: 1,

@@ -19,7 +19,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
 use SolanaPhpSdk\Keypair\Keypair;
 use SolanaPhpSdk\Rpc\RpcClient;
-use SolanaPhpSdk\Transaction\VersionedTransaction;
+use PayKit\PayCore\Solana\TransactionWire;
 use Throwable;
 
 /**
@@ -297,7 +297,7 @@ final class Adapter
             throw new InvalidProofException('invalid_exact_svm_payload_base64');
         }
         try {
-            $tx = VersionedTransaction::deserialize($rawTx);
+            $tx = TransactionWire::deserialize($rawTx);
         } catch (Throwable) {
             throw new InvalidProofException('invalid_exact_svm_payload_transaction_parse');
         }

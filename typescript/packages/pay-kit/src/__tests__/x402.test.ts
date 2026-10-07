@@ -17,6 +17,7 @@ expectTypeOf<Immutable<ExactSvmSchemeOptions>>().toEqualTypeOf<X402Options>();
 // no-bare-offer failure path.
 const rpcState = vi.hoisted(() => ({ fail: false, slot: 314n }));
 const ctorCalls = vi.hoisted(() => [] as unknown[][]);
+const uptoCtorCalls = vi.hoisted(() => [] as unknown[][]);
 const uptoSettleCalls = vi.hoisted(() => [] as unknown[][]);
 vi.mock('@solana/kit', async importOriginal => {
     const actual = await importOriginal<typeof import('@solana/kit')>();
@@ -62,6 +63,10 @@ vi.mock('@x402/svm/upto/facilitator', async importOriginal => {
     return {
         ...actual,
         UptoSvmScheme: class extends actual.UptoSvmScheme {
+            constructor(...args: ConstructorParameters<typeof actual.UptoSvmScheme>) {
+                uptoCtorCalls.push(args);
+                super(...args);
+            }
             settle(...args: Parameters<InstanceType<typeof actual.UptoSvmScheme>['settle']>) {
                 uptoSettleCalls.push(args);
                 return super.settle(...args);
@@ -70,6 +75,17 @@ vi.mock('@x402/svm/upto/facilitator', async importOriginal => {
     };
 });
 
+import {
+    address,
+    compileTransaction,
+    createTransactionMessage,
+    getBase64EncodedWireTransaction,
+    pipe,
+    setTransactionMessageFeePayer,
+    setTransactionMessageLifetimeUsingBlockhash,
+    type Blockhash,
+    type TransactionVersion,
+} from '@solana/kit';
 import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from '@x402/core/http';
 
 import { createX402ExactAdapter } from '../adapters/x402.js';
@@ -85,6 +101,20 @@ async function testConfig(): Promise<PayKitConfig> {
 
 function gateFor(config: PayKitConfig, amount = usd('0.10')): Gate {
     return Gate.create({ amount, name: 'test' }, gateDefaults(config));
+}
+
+/** An unsigned, instruction-less wire transaction of the given message version. */
+function wireTransaction(version: TransactionVersion): string {
+    const message = pipe(
+        createTransactionMessage({ version } as never),
+        m => setTransactionMessageFeePayer(address('11111111111111111111111111111111'), m),
+        m =>
+            setTransactionMessageLifetimeUsingBlockhash(
+                { blockhash: 'EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N' as Blockhash, lastValidBlockHeight: 1n },
+                m,
+            ),
+    );
+    return getBase64EncodedWireTransaction(compileTransaction(message));
 }
 
 describe('x402 exact adapter', () => {
@@ -121,6 +151,27 @@ describe('x402 exact adapter', () => {
         expect(headers['payment-required'].length).toBeGreaterThan(0);
         expect(decodePaymentRequiredHeader(headers['payment-required']).resource.url).toBe(requestUrl);
     });
+
+    async function exactRequestFor(transaction: string) {
+        const config = await testConfig();
+        const adapter = createX402ExactAdapter(config);
+        const gate = gateFor(config);
+        const accepted = await adapter.acceptsEntry(gate, new Request('http://localhost/r'));
+        const header = encodePaymentSignatureHeader({ accepted, payload: { transaction }, x402Version: 2 } as never);
+        return { adapter, gate, request: new Request('http://localhost/r', { headers: { 'x-payment': header } }) };
+    }
+
+    it.each<TransactionVersion>(['legacy', 0])(
+        'lets a %s transaction through to the facilitator, which applies the version policy',
+        async version => {
+            const { adapter, gate, request } = await exactRequestFor(wireTransaction(version));
+            const error = await adapter.verifyAndSettle(gate, request).catch((e: unknown) => e);
+            // The minimal payload fails later in the facilitator, on its
+            // content: the adapter itself never rejects on message version.
+            expect(error).toBeInstanceOf(Error);
+            expect((error as Error).message).not.toMatch(/legacy/);
+        },
+    );
 });
 
 describe('x402 smart-wallet options', () => {
@@ -157,6 +208,36 @@ describe('x402 smart-wallet options', () => {
         createX402ExactAdapter(config);
         expect(ctorCalls.length).toBeGreaterThan(0);
         expect(ctorCalls.at(-1)?.[2]).toEqual(config.x402);
+    });
+
+    it('shares a configured pending-settlement store with both facilitators', async () => {
+        const store = {
+            delete: async () => undefined,
+            get: async () => undefined,
+            set: async () => undefined,
+        };
+        const config = await configure({
+            mpp: { challengeBindingSecret: 'x402-test-secret' },
+            network: 'solana_localnet',
+            x402: { pendingSettlementStore: store },
+        });
+        uptoCtorCalls.length = 0;
+        createX402ExactAdapter(config);
+        new X402Upto(config);
+        // The same instance reaches both, so a settle retry landing on another
+        // replica reconciles for `exact` and `upto` alike.
+        expect((ctorCalls.at(-1)?.[2] as { pendingSettlementStore?: unknown }).pendingSettlementStore).toBe(store);
+        expect((uptoCtorCalls.at(-1)?.[1] as { pendingSettlementStore?: unknown }).pendingSettlementStore).toBe(store);
+
+        // Without one, neither facilitator is handed an explicit store and
+        // each falls back to its own in-memory default.
+        const bare = await configure({
+            mpp: { challengeBindingSecret: 'x402-test-secret' },
+            network: 'solana_localnet',
+        });
+        uptoCtorCalls.length = 0;
+        new X402Upto(bare);
+        expect(uptoCtorCalls.at(-1)?.[1]).toEqual({});
     });
 
     it('copies the allowlist so callers cannot mutate verification policy', async () => {
@@ -267,6 +348,28 @@ describe('x402 upto engine', () => {
         const requirements = uptoSettleCalls.at(-1)?.[1] as { extra?: { recentSlot?: unknown } } | undefined;
         expect(requirements?.extra?.recentSlot).toBe('314');
     });
+
+    async function verifyOpenRequestWith(openTransaction: string): Promise<{ request: Request; upto: X402Upto }> {
+        const config = await testConfig();
+        const upto = new X402Upto(config);
+        const [accepted] = await upto.accepts(usd('1.00'));
+        const header = encodePaymentSignatureHeader({
+            accepted,
+            payload: { openSlot: '314', openTransaction },
+            x402Version: 2,
+        } as never);
+        return { request: new Request('http://localhost/u', { headers: { 'x-payment': header } }), upto };
+    }
+
+    it.each<TransactionVersion>(['legacy', 0])(
+        'lets a %s open transaction through to the facilitator, which applies the version policy',
+        async version => {
+            const { request, upto } = await verifyOpenRequestWith(wireTransaction(version));
+            // The minimal payload fails later in the facilitator, on its
+            // content: the engine itself never rejects on message version.
+            await expect(upto.verifyOpen(request, usd('1.00'))).rejects.toThrow(/unsupported_payload_type/);
+        },
+    );
 
     it('rejects a payload without a decimal-string openSlot before any broadcast', async () => {
         const { request, upto } = await verifyOpenRequestFor('not-a-slot');

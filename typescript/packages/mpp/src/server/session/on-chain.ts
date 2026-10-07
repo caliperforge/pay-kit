@@ -523,8 +523,9 @@ export interface VerifyOpenTxResult {
 /**
  * Decode and validate the client-submitted open transaction.
  *
- * Accepts both legacy and v0 transaction encodings (the Rust client emits
- * legacy; the TS client emits v0).
+ * Accepts both legacy and v0 transaction encodings: pay-kit clients emit v0,
+ * but a pre-cutover client's legacy (unversioned) open is still verified
+ * under the same rules.
  *
  * Asserts the embedded Open IX targets the configured payment-channels
  * program, that `payee == expected.recipient`, that the mint matches the

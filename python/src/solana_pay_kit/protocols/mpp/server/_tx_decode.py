@@ -26,7 +26,6 @@ from solana_pay_kit._paycore.solana import (
     default_token_program_for_currency,
     resolve_mint,
 )
-from solana_pay_kit._paycore.transaction import is_v0_wire_bytes
 from solana_pay_kit.protocols.mpp.intents.charge import ChargeRequest
 
 _SYSTEM_PROGRAM = "11111111111111111111111111111111"
@@ -323,22 +322,18 @@ def _status_ok(response: Any) -> bool:
 
 
 def _extract_recent_blockhash(transaction_b64: str) -> str:
-    """Decode a base64 transaction and return its recent blockhash (base58).
+    """Decode a base64 (legacy or v0) transaction and return its recent blockhash (base58).
 
-    Tries the legacy ``Transaction`` first (the most common shape from our
-    SDK clients) and falls back to ``VersionedTransaction``. Kept thin so
-    the surrounding network check can be exercised by tests without a full
-    verification pipeline in place.
+    ``VersionedTransaction.from_bytes`` dispatches on the message-version
+    prefix, so legacy and v0 wires both decode; the caller maps any decode
+    failure to ``invalid-payload-type``. Kept thin so the surrounding network
+    check can be exercised by tests without a full verification pipeline in
+    place.
     """
-    from solders.transaction import Transaction, VersionedTransaction
+    from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64)
-    try:
-        tx = Transaction.from_bytes(raw)
-        return str(tx.message.recent_blockhash)
-    except Exception:
-        vtx = VersionedTransaction.from_bytes(raw)
-        return str(vtx.message.recent_blockhash)
+    return str(VersionedTransaction.from_bytes(raw).message.recent_blockhash)
 
 
 def _validate_compute_budget_instruction(data: bytes, account_count: int, fee_sponsored: bool = False) -> None:
@@ -399,59 +394,31 @@ def _validate_compute_budget_instruction(data: bytes, account_count: int, fee_sp
 def _decode_legacy_payment_instructions(transaction_b64: str) -> list[dict[str, Any]]:
     """Decode local transfer and memo instructions from a legacy or v0 transaction.
 
-    Accepts both legacy ``Transaction`` and ``VersionedTransaction``. For v0
-    we only inspect the static account keys; address lookup tables are
-    rejected up-front (a v0 tx with a non-empty ALT list would let an
-    instruction reference accounts the verifier cannot see). Mirrors the
-    Rust spine's ``verify_versioned_transaction_pre_broadcast`` policy.
+    ``VersionedTransaction.from_bytes`` dispatches on the message-version
+    prefix, so a pre-cutover client's legacy wire decodes alongside v0 and is
+    verified under the same rules. We only inspect the static account keys;
+    address lookup tables are rejected up-front (a v0 tx with a non-empty ALT
+    list would let an instruction reference accounts the verifier cannot
+    see). Mirrors the Rust spine's ``verify_versioned_transaction_pre_broadcast``
+    policy.
     """
-    from solders.transaction import Transaction, VersionedTransaction
+    from solders.transaction import VersionedTransaction
 
     raw = base64.b64decode(transaction_b64)
-    message: Any = None
-    message_instructions: list[Any] = []
-    # Route v0 wire bytes straight to VersionedTransaction; the legacy
-    # parser in solders is lenient and can mis-parse a signed v0 tx as a
-    # degenerate legacy tx with bogus instructions (see is_v0_wire_bytes).
-    parsed = False
-    if is_v0_wire_bytes(raw):
-        try:
-            vtx = VersionedTransaction.from_bytes(raw)
-        except Exception:
-            vtx = None
-        if vtx is not None:
-            lookups = getattr(vtx.message, "address_table_lookups", None)
-            if lookups:
-                raise PaymentError(
-                    "v0 transactions with address lookup tables are not supported",
-                    code="invalid-payload",
-                ) from None
-            message = vtx.message
-            message_instructions = list(vtx.message.instructions)
-            parsed = True
-    if not parsed:
-        try:
-            tx = Transaction.from_bytes(raw)
-            message = tx.message
-            message_instructions = list(tx.message.instructions)
-        except Exception:
-            try:
-                vtx = VersionedTransaction.from_bytes(raw)
-            except Exception as exc:
-                raise PaymentError(
-                    "unsupported transaction shape for pre-broadcast verification",
-                    code="invalid-payload-type",
-                ) from exc
-            # Reject v0 transactions that reference address lookup tables; the
-            # pre-broadcast verifier only sees static account keys.
-            lookups = getattr(vtx.message, "address_table_lookups", None)
-            if lookups:
-                raise PaymentError(
-                    "v0 transactions with address lookup tables are not supported",
-                    code="invalid-payload",
-                ) from None
-            message = vtx.message
-            message_instructions = list(vtx.message.instructions)
+    try:
+        vtx = VersionedTransaction.from_bytes(raw)
+    except Exception as exc:
+        raise PaymentError(
+            "unsupported transaction shape for pre-broadcast verification",
+            code="invalid-payload-type",
+        ) from exc
+    if getattr(vtx.message, "address_table_lookups", None):
+        raise PaymentError(
+            "v0 transactions with address lookup tables are not supported",
+            code="invalid-payload",
+        )
+    message = vtx.message
+    message_instructions = list(message.instructions)
 
     account_keys = [str(key) for key in message.account_keys]
     instructions: list[dict[str, Any]] = []

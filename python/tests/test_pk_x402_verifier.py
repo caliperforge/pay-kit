@@ -567,3 +567,24 @@ def test_adapter_delegated_mode_not_implemented():
     cfg = configure(network="solana_localnet", preflight=False, x402=X402Config(facilitator_url="https://fac"))
     with pytest.raises(NotImplementedError, match="delegated mode"):
         X402Adapter(cfg)
+
+
+def test_exact_verifier_accepts_legacy_transaction():
+    """A well-formed exact payment on a legacy (unversioned) wire, as a
+    pre-cutover client sends, is verified under the same static layout as v0."""
+    from solders.message import Message
+    from solders.transaction import Transaction
+
+    fee_payer, authority, pay_to, src, dest = _scenario()
+    ixs = [
+        _compute_limit_ix(),
+        _compute_price_ix(),
+        _transfer_checked_ix(source=src, mint=MINT, destination=dest, authority=authority.pubkey()),
+    ]
+    blockhash = Hash.from_string(BH)
+    tx = Transaction.new_unsigned(Message.new_with_blockhash(ixs, fee_payer.pubkey(), blockhash))
+    tx.sign([fee_payer, authority], blockhash)
+    tx_b64 = base64.b64encode(bytes(tx)).decode("ascii")
+    out = ExactVerifier.verify(tx_b64, _requirement(pay_to), [str(fee_payer.pubkey())])
+    assert out["destination"] == str(dest)
+    assert out["authority"] == str(authority.pubkey())

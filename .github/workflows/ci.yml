@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_call:
 
+permissions:
+  contents: read
+
 defaults:
   run:
     working-directory: typescript
@@ -149,9 +152,9 @@ jobs:
       - name: Verify committed gen files are up to date
         working-directory: .
         run: |
-          if ! git diff --quiet -- rust/crates/kit/src/mpp/server/html/ go/protocols/mpp/server/html/ lua/pay_kit/protocols/mpp/server/html_assets/ python/src/pay_kit/protocols/mpp/server/html/; then
+          if ! git diff --quiet -- rust/crates/kit/src/mpp/server/html/ go/protocols/mpp/server/html/ lua/pay_kit/protocols/mpp/server/html_assets/ python/src/solana_pay_kit/protocols/mpp/server/html/; then
             echo "::error::Generated files are out of date. Run 'just html-build' and commit the results."
-            git diff --stat -- rust/crates/kit/src/mpp/server/html/ go/protocols/mpp/server/html/ lua/pay_kit/protocols/mpp/server/html_assets/ python/src/pay_kit/protocols/mpp/server/html/
+            git diff --stat -- rust/crates/kit/src/mpp/server/html/ go/protocols/mpp/server/html/ lua/pay_kit/protocols/mpp/server/html_assets/ python/src/solana_pay_kit/protocols/mpp/server/html/
             exit 1
           fi
       - name: Upload HTML build artifacts
@@ -163,8 +166,35 @@ jobs:
             rust/crates/kit/src/mpp/server/html/
             go/protocols/mpp/server/html/
             lua/pay_kit/protocols/mpp/server/html_assets/
-            python/src/pay_kit/protocols/mpp/server/html/
+            python/src/solana_pay_kit/protocols/mpp/server/html/
             typescript/packages/mpp/src/server/html-assets.gen.ts
+
+  test-playground-smoke:
+    name: Playground browser smoke
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: |
+            typescript/pnpm-lock.yaml
+            playground/pnpm-lock.yaml
+      - name: Install playground dependencies
+        working-directory: playground
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        working-directory: playground
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify playground renders
+        working-directory: playground
+        run: pnpm exec playwright test --config playwright.smoke.config.ts
 
   test-rust:
     name: Rust tests
@@ -229,14 +259,13 @@ jobs:
         working-directory: rust
         run: cargo test -p solana-pay-kit --lib x402
 
-      - name: Run Redis channel store integration test
+      - name: Run Redis channel store integration tests
         working-directory: rust
         env:
           PAY_KIT_TEST_REDIS_URL: redis://127.0.0.1:6379
         run: >-
           cargo test -p solana-pay-kit --features redis-store --lib
-          core::store::tests::redis_channel_store_roundtrip_and_atomic_watermark
-          -- --exact
+          core::store::tests::redis_channel_store_
 
       - name: Enforce Rust coverage floor (>=90 cross-SDK baseline)
         working-directory: rust
@@ -390,6 +419,11 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Start Surfnet
         working-directory: .
+        env:
+          # Fork the canonical sandbox so the local, single-instance RPC has
+          # the payment-channel and subscription programs without inheriting
+          # the hosted load balancer's cross-request blockhash races.
+          SURFPOOL_REMOTE_RPC_URL: https://402.surfnet.dev:8899
         run: |
           node harness/start-surfnet-proxy.mjs &
           ready=0
@@ -421,11 +455,8 @@ jobs:
         run: pnpm test:e2e
         env:
           PLAYGROUND_DISABLE_SIDECAR: "1"
-          # The hosted payment sandbox has the canonical payment-channel and
-          # subscription programs deployed; the lightweight CI Surfnet used by
-          # unit tests intentionally does not.
-          RPC_URL: https://402.surfnet.dev:8899
-          VITE_RPC_URL: https://402.surfnet.dev:8899
+          RPC_URL: http://localhost:8899
+          VITE_RPC_URL: http://localhost:8899
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
@@ -518,34 +549,48 @@ jobs:
           bundler-cache: true
           working-directory: ruby
       - uses: ./.github/actions/setup-harness
+        id: harness-setup
         with:
           cargo-bins: "paykit-harness-bins:mpp_harness_client,mpp_harness_server"
           cargo-cache-key: ts
+      # Keep pairing coverage after test failures, but not failed setup or cancellation.
+      - name: Run TypeScript end-to-end harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
+        working-directory: harness
+        run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "typescript client pays typescript server"
+        env:
+          MPP_HARNESS_CLIENTS: typescript
+          MPP_HARNESS_SERVERS: typescript
       - name: Run Rust client harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
         working-directory: harness
         run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "rust client pays typescript server"
         env:
           MPP_HARNESS_CLIENTS: rust
           MPP_HARNESS_SERVERS: typescript
       - name: Run Rust server harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
         working-directory: harness
         run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "typescript client pays rust server"
         env:
           MPP_HARNESS_CLIENTS: typescript
           MPP_HARNESS_SERVERS: rust
       - name: Run Rust end-to-end harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
         working-directory: harness
         run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "rust client pays rust server"
         env:
           MPP_HARNESS_CLIENTS: rust
           MPP_HARNESS_SERVERS: rust
       - name: Run Ruby server harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
         working-directory: harness
         run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "typescript client pays ruby server"
         env:
           MPP_HARNESS_CLIENTS: typescript
           MPP_HARNESS_SERVERS: ruby
       - name: Run Rust client to Ruby server harness smoke
+        if: ${{ !cancelled() && steps.harness-setup.outcome == 'success' }}
         working-directory: harness
         run: pnpm exec vitest run test/e2e.test.ts --testNamePattern "rust client pays ruby server"
         env:

@@ -183,7 +183,7 @@ describe('verifyOpenTx transaction shape', () => {
         expect(verified.salt).toBe(7n);
     });
 
-    test('accepts a legacy-encoded open transaction (Rust client wire format)', async () => {
+    test('accepts a legacy-encoded open transaction (pre-cutover client wire format)', async () => {
         const { expected, open, openPayload } = await verifiedOpenFixture();
         const legacyTransaction = reencodeAsLegacy(open.transaction);
         expect(legacyTransaction).not.toBe(open.transaction);

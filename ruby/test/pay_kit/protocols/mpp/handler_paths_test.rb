@@ -9,7 +9,7 @@ class HandlerPathsTest < Minitest::Test
     request = charge_request
     rpc = FakeRpc.new(signature: valid_signature)
     handler = handler_with(rpc)
-    transaction = Base64.strict_encode64(legacy_transaction(
+    transaction = Base64.strict_encode64(v0_transaction(
       account_keys: [pubkey(1), request.recipient, PROGRAMS::SYSTEM_PROGRAM],
       instructions: [compiled_instruction(2, [0, 1], u32(2) + u64(1000))]
     ))
@@ -29,7 +29,7 @@ class HandlerPathsTest < Minitest::Test
     request = charge_request
     rpc = FakeRpc.new(simulation_error: {"InstructionError" => [0, "Custom"]})
     handler = handler_with(rpc)
-    transaction = Base64.strict_encode64(legacy_transaction(
+    transaction = Base64.strict_encode64(v0_transaction(
       account_keys: [pubkey(1), request.recipient, PROGRAMS::SYSTEM_PROGRAM],
       instructions: [compiled_instruction(2, [0, 1], u32(2) + u64(1000))]
     ))
@@ -39,6 +39,25 @@ class HandlerPathsTest < Minitest::Test
 
     assert_equal 402, response.status
     assert_match(/Simulation failed/, response.body["message"])
+  end
+
+  def test_pull_settles_a_legacy_transaction
+    # A pre-cutover client's legacy (unprefixed) wire is verified and settled
+    # under the same rules as v0.
+    request = charge_request
+    rpc = FakeRpc.new(signature: valid_signature)
+    handler = handler_with(rpc)
+    transaction = Base64.strict_encode64(legacy_transaction(
+      account_keys: [pubkey(1), request.recipient, PROGRAMS::SYSTEM_PROGRAM],
+      instructions: [compiled_instruction(2, [0, 1], u32(2) + u64(1000))]
+    ))
+    credential = PayKit::Protocols::Mpp::Protocol::Core::Credential.new(challenge: challenges.create_challenge(request).to_echo, payload: {"transaction" => transaction})
+
+    response = handler.handle(credential.to_authorization_header, request)
+
+    assert_equal 200, response.status
+    assert_equal 1, rpc.simulated_transactions.length
+    assert_equal 1, rpc.sent_transactions.length
   end
 
   def test_pull_rejects_wrong_surfpool_network

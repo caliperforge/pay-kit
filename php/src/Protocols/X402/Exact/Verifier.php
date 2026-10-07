@@ -7,7 +7,7 @@ namespace PayKit\Protocols\X402\Exact;
 use PayKit\Exception\InvalidProofException;
 use PayKit\PayCore\Solana\Mints;
 use SolanaPhpSdk\Keypair\PublicKey;
-use SolanaPhpSdk\Transaction\VersionedTransaction;
+use PayKit\PayCore\Solana\TransactionWire;
 use Throwable;
 
 /**
@@ -68,14 +68,15 @@ final class Verifier
             throw new InvalidProofException('invalid_exact_svm_payload_base64');
         }
 
+        // Legacy and v0 wires both decode; the static layout below applies
+        // to either encoding.
         try {
-            $tx = VersionedTransaction::deserialize($raw);
+            $tx = TransactionWire::deserialize($raw);
         } catch (Throwable) {
             throw new InvalidProofException('invalid_exact_svm_payload_transaction_parse');
         }
 
-        $message = $tx->message;
-        $instructions = $message->compiledInstructions;
+        $instructions = $tx->compiledInstructions();
 
         // Rule 1: instruction count.
         $n = count($instructions);
@@ -87,7 +88,7 @@ final class Verifier
 
         $accountKeys = array_map(
             static fn (PublicKey $k): string => (string) $k,
-            $message->staticAccountKeys,
+            $tx->staticAccountKeys(),
         );
 
         // Rule 2: compute-budget set-compute-unit-limit.

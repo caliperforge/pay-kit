@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	solana "github.com/gagliardetto/solana-go"
@@ -88,10 +89,12 @@ func newFixture(t *testing.T) fixture {
 
 func (f fixture) tx(extra ...solana.CompiledInstruction) *solana.Transaction {
 	ixs := append([]solana.CompiledInstruction{f.computeLimit, f.computePrice, f.transfer}, extra...)
-	return &solana.Transaction{
+	tx := &solana.Transaction{
 		Message:    solana.Message{AccountKeys: f.keys, Instructions: ixs},
 		Signatures: []solana.Signature{{}},
 	}
+	tx.Message.SetVersion(solana.MessageVersionV0)
+	return tx
 }
 
 func TestVerifyAcceptsValidTransaction(t *testing.T) {
@@ -341,6 +344,7 @@ func settleFixture(t *testing.T, fake *fakeRPC) (*Adapter, *paykit.Gate, string)
 		},
 		Signatures: []solana.Signature{{}, solana.MustSignatureFromBase58(sampleClientSig)},
 	}
+	tx.Message.SetVersion(solana.MessageVersionV0)
 	wire, err := tx.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +551,40 @@ func TestVerifyAndSettleRejectsUndecodableTransaction(t *testing.T) {
 	}
 }
 
+// A legacy (unprefixed) transaction passes the decode boundary: the adapter
+// only rejects it later, on its content, exactly like a version-0 message.
+func TestVerifyAndSettleDecodesLegacyTransaction(t *testing.T) {
+	op := signer.Generate()
+	a := &Adapter{
+		cfg:    paykit.Config{Network: paykit.SolanaLocalnet, Stablecoins: []paykit.Stablecoin{paykit.USDC}, Operator: paykit.Operator{Signer: op, Recipient: op.Pubkey()}, X402: paykit.X402Config{Scheme: "exact"}},
+		signer: op,
+		rpc:    &fakeRPC{},
+	}
+	memo, err := solanatx.BuildMemoInstruction("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bh := solana.MustHashFromBase58(testutil.NewPrivateKey().PublicKey().String())
+	tx, err := solana.NewTransaction([]solana.Instruction{memo}, bh, solana.TransactionPayer(testutil.NewPrivateKey().PublicKey()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := solanatx.EncodeTransactionBase64(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := proto.Credential{X402Version: proto.X402Version, Payload: proto.CredentialPayload{Transaction: encoded}}
+	credJSON, _ := json.Marshal(cred)
+	gate := paykit.Gate{Amount: paykit.MustParseUSD("0.001")}
+	_, err = a.VerifyAndSettle(&paykit.AdapterRequest{Gate: &gate, PaymentSig: base64.StdEncoding.EncodeToString(credJSON)})
+	if err == nil {
+		t.Fatal("a memo-only payment must still be rejected on its content")
+	}
+	if strings.Contains(err.Error(), "transaction decode") || strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("legacy message was rejected at the decode boundary: %v", err)
+	}
+}
+
 func TestVerifyAndSettleRejectsBadOperatorRecipient(t *testing.T) {
 	op := signer.Generate()
 	a := &Adapter{
@@ -610,7 +648,7 @@ func TestCosignPassthroughWhenOperatorAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	bh := solana.MustHashFromBase58(testutil.NewPrivateKey().PublicKey().String())
-	tx, err := solana.NewTransaction([]solana.Instruction{memo}, bh, solana.TransactionPayer(payer))
+	tx, err := solanatx.NewV0Transaction([]solana.Instruction{memo}, bh, solana.TransactionPayer(payer))
 	if err != nil {
 		t.Fatal(err)
 	}

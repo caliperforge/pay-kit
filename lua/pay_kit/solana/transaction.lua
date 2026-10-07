@@ -1,5 +1,7 @@
 --[[
-Solana transaction codec for legacy and v0 (versioned) messages.
+Solana transaction codec for legacy and v0 (versioned) messages. Clients only
+build v0, but servers keep accepting a pre-cutover client's legacy
+(unprefixed) message and police it under the v0 rules.
 
 Mirrors `ruby/lib/mpp/methods/solana/transaction.rb`. Parses the wire
 bytes a Solana JSON-RPC `sendTransaction` payload carries, exposes the
@@ -125,9 +127,9 @@ local function parse_instruction(cursor)
 end
 
 -- Parse a Solana transaction message. Both legacy (no version byte) and v0
--- (leading 0x80 prefix) are accepted; v0 transactions additionally carry
--- a list of address-table-lookup entries the verifier inspects via
--- `message.address_table_lookups`.
+-- (leading 0x80 prefix) are accepted; v1 is not implemented. v0 messages
+-- additionally carry a list of address-table-lookup entries the verifier
+-- inspects via `message.address_table_lookups` (always empty for legacy).
 local function parse_message(raw)
   local cursor = new_cursor(raw)
   local version = 'legacy'
@@ -162,6 +164,11 @@ local function parse_message(raw)
     for _ = 1, lookup_count do
       lookups[#lookups + 1] = parse_lookup(cursor)
     end
+  end
+  -- Canonical encoding only: what the signatures cover is exactly what
+  -- re-serializes, so a message followed by stray bytes is malformed.
+  if cursor.offset <= #raw then
+    error('trailing bytes after transaction message')
   end
   return {
     raw = raw,

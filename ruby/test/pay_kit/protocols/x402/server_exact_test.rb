@@ -378,6 +378,34 @@ class X402ServerExactTest < Minitest::Test
     assert_equal "payment payload transaction is not valid base64", error.message
   end
 
+  def test_settlement_accepts_legacy_transaction
+    # A pre-cutover client's legacy (unprefixed) wire is verified, co-signed
+    # over the bare message bytes, and sent like a v0 one.
+    sent = []
+    state = build_state(sender: ->(_state, transaction) {
+      sent << transaction
+      "unit-settlement"
+    })
+    # Re-frame the same message as a legacy wire (drop the 0x80 version prefix
+    # and the trailing empty address-table lookup vector) and re-sign it as
+    # the client would, over the bare legacy message bytes.
+    payment_header = mutate_payment_transaction(build_payment_header(state), resign: true) do |transaction|
+      bytes = transaction.b
+      signature_count, signatures_offset = PayKit::Protocols::X402::Protocol::Schemes::Exact.read_short_vec(bytes, 0)
+      message_offset = signatures_offset + (signature_count * 64)
+      bytes.byteslice(0, message_offset) + bytes.byteslice(message_offset + 1, bytes.bytesize - message_offset - 2)
+    end
+
+    settlement = PayKit::Protocols::X402::Server::Exact.settle_exact_payment(state, payment_header)
+
+    assert_equal "unit-settlement", settlement
+    signed_transaction = sent.fetch(0)
+    signature_count, signatures_offset = PayKit::Protocols::X402::Protocol::Schemes::Exact.read_short_vec(signed_transaction, 0)
+    message_offset = signatures_offset + (signature_count * 64)
+    assert_equal 0, signed_transaction.getbyte(message_offset) & 0x80, "the legacy message must be sent unprefixed"
+    refute_equal "\x00".b * 64, signed_transaction.byteslice(1, 64)
+  end
+
   def test_settlement_rejects_transaction_amount_mismatch_before_sending
     sent = []
     state = build_state(sender: ->(_state, transaction) {

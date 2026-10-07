@@ -13,7 +13,16 @@
 //     handleClose): the operator-authorized and client-authorized paths and
 //     the rejection of an unauthorized closer.
 
-import { address, generateKeyPairSigner, getBase64Codec, type KeyPairSigner } from '@solana/kit';
+import {
+    address,
+    generateKeyPairSigner,
+    getBase64Codec,
+    getCompiledTransactionMessageDecoder,
+    getCompiledTransactionMessageEncoder,
+    getTransactionDecoder,
+    getTransactionEncoder,
+    type KeyPairSigner,
+} from '@solana/kit';
 import { describe, expect, test } from 'vitest';
 
 import { ActiveSession, signSessionAuthentication } from '../client/Session.js';
@@ -219,6 +228,21 @@ async function buildTopUpWire(f: Fixture, rpc: unknown, amount: bigint, payerSig
     return await buildAndSignWireTransaction(rpc as never, payer, [instruction]);
 }
 
+/** Re-encode a v0 wire transaction as a legacy (unversioned) wire transaction. */
+function reencodeAsLegacy(transactionBase64: string): string {
+    const tx = getTransactionDecoder().decode(getBase64Codec().encode(transactionBase64));
+    const compiled = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
+    const legacyMessageBytes = getCompiledTransactionMessageEncoder().encode({
+        ...compiled,
+        version: 'legacy',
+    } as never);
+    const legacyTx = getTransactionEncoder().encode({
+        messageBytes: legacyMessageBytes as never,
+        signatures: tx.signatures,
+    });
+    return getBase64Codec().decode(legacyTx);
+}
+
 // ── verify() — topUp ────────────────────────────────────────────────────
 
 describe('session() verify() topUp', () => {
@@ -304,6 +328,28 @@ describe('session() verify() topUp', () => {
         const state = await f.store.getChannel(f.channel.address);
         expect(state?.deposit).toBe(5_000n);
         expect(state?.processedTopUpSignatures).toHaveLength(1);
+    });
+
+    test('topUp accepts a legacy-encoded wire transaction under the version-0 rules', async () => {
+        const f = await makeFixture();
+        const { rpc, sent } = mockRpc({ accountData: channelAccountData(f, 5_000n) });
+        const method = makeMethod(f, rpc);
+        await seedChannel(f);
+
+        // A pre-cutover client's legacy (unversioned) top-up is verified and
+        // broadcast exactly like a v0 one.
+        const wire = reencodeAsLegacy(await buildTopUpWire(f, rpc, 4_000n));
+        const receipt = await verify(
+            method,
+            makeCred(f, {
+                action: 'topUp',
+                additionalAmount: '4000',
+                channelId: f.channel.address,
+                transaction: wire,
+            }),
+        );
+        expect(receipt.status).toBe('success');
+        expect(sent).toHaveLength(1);
     });
 
     test('topUp rejects an unknown channel before touching the network', async () => {
