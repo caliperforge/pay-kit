@@ -1,0 +1,184 @@
+{
+  "autoReview": [],
+  "strictness": 1,
+  "customContext": {
+    "rules": [
+      {
+        "rule": "pay-kit#317 `solana-foundation/pay-kit@a58c78e:go/protocols/mpp/wire/challenge_test.go:56`: `now` was fixed at 1900, so the leap-second cases proved only that parsing succeeded, not the mapping to the last nanosecond of `:59` (https://github.com/solana-foundation/pay-kit/pull/317#discussion_r3982265139).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@efff41c:harness/protocol-runners/kotlin.json:3`: the manifest execs an installed Gradle distribution that no CI job builds, so on a clean checkout the runner cannot start (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253848).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@8c59ab9:harness/test/protocol-conformance.test.ts:195`: a spawn failure, a non-zero exit or empty stdout counted as the expected divergence, so a runner that never ran looked green.",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@2291822:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:77`: decoding with unknown keys ignored silently dropped the `hash` payload of `credential_with_source` (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253870).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@c4341ee:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:57-66`: the same lenient decoding dropped the challenge `description` (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253852).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#320 `solana-foundation/pay-kit@a55ee48:php/tests/PayCore/Rfc3339Test.php:48`: long-fraction vectors were checked with `format('c')`, which drops microseconds, so a parser that discards the fraction still passed (https://github.com/solana-foundation/pay-kit/pull/320#discussion_r3992887690).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#320 `solana-foundation/pay-kit@a55ee48:php/tests/PayCore/Rfc3339Test.php:88`: no case exercised the last-day-of-month rule for `23:59:60Z`, so deleting the check kept the suite green (https://github.com/solana-foundation/pay-kit/pull/320#discussion_r3992887696).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#340 `solana-foundation/pay-kit@b2638e1:ruby/lib/pay_kit/config.rb:271`: an empty `PAY_KIT_RPC_URL` overrode the network default with `\"\"`, unlike the Python SDK it mirrors (https://github.com/solana-foundation/pay-kit/pull/340#discussion_r4095737040).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#340 `solana-foundation/pay-kit@b2638e1:ruby/lib/pay_kit/config.rb:277`: a zero or negative `PAY_KIT_MPP_EXPIRES_IN` was accepted, issuing already-expired challenges, unlike the Python SDK it mirrors (https://github.com/solana-foundation/pay-kit/pull/340#discussion_r4095737053).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#340 `solana-foundation/pay-kit@b2638e1:ruby/lib/pay_kit/config.rb:308`: `yes`/`no`/`on`/`off` for `PAY_KIT_PREFLIGHT` raised at boot, unlike the Python SDK it mirrors (https://github.com/solana-foundation/pay-kit/pull/340#discussion_r4095737067).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#340 `solana-foundation/pay-kit@b2638e1:ruby/lib/pay_kit/config.rb:268`: lowercase `pay_kit_*` variables were silently ignored, unlike the Python SDK it mirrors (https://github.com/solana-foundation/pay-kit/pull/340#discussion_r4095737071).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#15 `caliperforge/pay-kit@1f02e55:swift/Sources/mpp-protocol-runner/main.swift:74`: `challenge.parse` dropped `description` (https://github.com/caliperforge/pay-kit/pull/15#discussion_r4173474978).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#15 `caliperforge/pay-kit@1f02e55:swift/Sources/mpp-protocol-runner/main.swift:97`: `credential.format` required `transaction` for `type: \"transaction\"`, so the canonical `basic_credential` vector could not be formatted (https://github.com/caliperforge/pay-kit/pull/15#discussion_r4173474983).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#322 `solana-foundation/pay-kit@c35533e:swift/Sources/SolanaPayKit/Protocols/Mpp/Core/Models.swift:125`: a review asked to allow leap seconds only in June and December; RFC 3339 §5.7 and Appendix D do not restrict them, the UTC month-end check matches the Rust reference, and the finding was withdrawn (https://github.com/solana-foundation/pay-kit/pull/322#discussion_r4035505691).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#282 `solana-foundation/pay-kit@e2f2b1d:harness/src/protocol/vectors.ts:436`: `collectExpiresCases()` had no callers, though comments said the per-language tests used it (https://github.com/solana-foundation/pay-kit/pull/282#discussion_r3751682861).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#282 `solana-foundation/pay-kit@faf3250:typescript/packages/mpp/src/__tests__/client-charge-validation.test.ts:449`: the test imported `../shared/rfc3339.js`, which did not exist at that SHA, so the whole file failed to load (https://github.com/solana-foundation/pay-kit/pull/282#discussion_r3960191945).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#282 `solana-foundation/pay-kit@faf3250:typescript/packages/mpp/src/__tests__/client-charge-validation.test.ts:478`: the loop tested only `parseRfc3339` while the production guards still used `new Date(...)` and `Date.parse`, so the tests could pass without exercising the shipped code (https://github.com/solana-foundation/pay-kit/pull/282#discussion_r3960191963).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#313 `solana-foundation/pay-kit@a752d51:typescript/packages/mpp/src/shared/rfc3339.ts:38`: rejected `second = 60`, which RFC 3339 allows for a positive leap second (https://github.com/solana-foundation/pay-kit/pull/313#discussion_r3962113765).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#14 `caliperforge/pay-kit@208fbd7:harness/test/protocol-conformance.test.ts:179`: an expectation checked only that `description` was absent, so `result: {}` would also pass (https://github.com/caliperforge/pay-kit/pull/14#discussion_r4173234527).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@66449a5:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:66`: <a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Challenge description is dropped** When a valid header contains a top-level `description`, such as the canonical `full_challenge`, this response omits it. The parsed challenge no longer matches the expected object, and the basic-only runner test does not catch the difference. (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253852).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@66449a5:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:65`: <a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Plain opaque values fail parsing** The SDK treats `opaque` as a pass-through string. When a valid challenge contains a plain value such as `trace-123`, decoding it as base64url JSON throws, so the runner returns `parse_error` instead of the parsed challenge. (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253859).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#13 `caliperforge/pay-kit@8c59ab9:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:77`: <a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Hash payload is lost** The canonical `credential_with_source` case contains a valid `hash` payload. This code deserializes it while ignoring unknown fields, but the Kotlin payload type has no `hash` property. Formatting then emits an Authorization header without the hash value. (https://github.com/caliperforge/pay-kit/pull/13#discussion_r4166253870).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#16 `caliperforge/pay-kit@00614e3:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:78`: <a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Opaque values are misparsed** When a valid Payment challenge includes `opaque`, the runner tries to decode it as base64url JSON even though the SDK and protocol adapter treat it as an opaque string. A value that is not JSON becomes a parse error; a JSON-bearing value is returned with the wrong type. (https://github.com/caliperforge/pay-kit/pull/16#discussion_r4186902439).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#16 `caliperforge/pay-kit@00614e3:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:85`: <a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Missing request becomes valid** If a `credential.format` input omits the required `challenge.request`, the runner inserts an empty request and can return a successful Authorization header. This hides an invalid input and produces a header that does not represent the supplied challenge. (https://github.com/caliperforge/pay-kit/pull/16#discussion_r4186902463).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#16 `caliperforge/pay-kit@00614e3:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:77`: <a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Empty optional values disappear** When a parsed challenge contains an explicitly empty `expires` or `digest`, these checks omit the field from the result. The adapter distinguishes a present empty value from an absent field, so the runner returns the wrong object for those headers. (https://github.com/caliperforge/pay-kit/pull/16#discussion_r4186902477).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#16 `caliperforge/pay-kit@00614e3:harness/kotlin-protocol-runner/src/main/kotlin/com/solana/paykit/protocolrunner/Main.kt:33`: <a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Conformance skips recognized operations** Seven recognized operations always return fixed errors, and the Kotlin divergence tests assert those responses instead of exercising protocol behavior. A green Kotlin protocol job therefore does not verify encoding, challenge generation, or those header operations. Implement them or separate these gap checks from conformance coverage. (https://github.com/caliperforge/pay-kit/pull/16#discussion_r4186902484).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#14 `caliperforge/pay-kit@17dd9a2:harness/test/protocol-conformance.test.ts:212`: <a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Formatter cases are skipped** This filter selects no successful `credential.format` vector and no `receipt.format` vector: neither operation is in `smokeOps`, and the Kotlin map has only a failing credential-format case. The credential formatter could fail every valid request without failing this suite, while the declared receipt-format gap gets no conformance check. Add a successful formatter case and track the receipt-format gap. (https://github.com/caliperforge/pay-kit/pull/14#discussion_r4173234531).",
+        "scope": [
+          "**"
+        ]
+      },
+      {
+        "rule": "pay-kit#14 `caliperforge/pay-kit@b976cea:harness/test/protocol-conformance.test.ts:179`: <a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Challenge fields go unchecked** For challenges with a description, this expectation checks only that `description` is absent. A response with `result: {}` would also pass, so the test would miss regressions in required challenge fields or the decoded request. Check those fields against the vector while allowing the known omission. (https://github.com/caliperforge/pay-kit/pull/14#discussion_r4173234527).",
+        "scope": [
+          "**"
+        ]
+      }
+    ],
+    "files": [
+      {
+        "path": "docs/paykit-interface.md",
+        "scope": [
+          "**"
+        ]
+      }
+    ]
+  }
+}
