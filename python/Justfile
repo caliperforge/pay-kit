@@ -28,6 +28,10 @@ fmt:
 typecheck:
     {{uv_run}} pyright
 
+# Run the pinned-seed instruction-allowlist negatives (not collected by `test`).
+allowlist-gen:
+    {{uv_run}} pytest tests/allowlist_generator.py
+
 # Run tests with the 90% line-coverage gate.
 test-cover:
     {{uv_run}} pytest --cov=solana_pay_kit --cov-report=term-missing --cov-fail-under=90 --ignore=tests/test_server_html.py
