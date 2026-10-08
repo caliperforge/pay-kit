@@ -163,7 +163,7 @@ const smokeCases = (() => {
 // Each entry is `${op} :: ${scenario}` and is asserted to STILL diverge so the
 // gap fails loudly the moment the SDK conforms (mirrors KNOWN_TS_DIVERGENCES).
 //
-// Only Kotlin's remain: every other SDK now conforms to the canonical receipt shape. The Go
+// Only Kotlin's and Swift's remain: every other SDK now conforms to the canonical receipt shape. The Go
 // (`challengeId:""` injected) and Ruby (`challengeId` hard-required) schema
 // mismatches on `receipt.parse :: success_receipt` were both fixed in the
 // per-SDK protocol-conformance round. Each entry maps to the exact response the
@@ -179,6 +179,11 @@ const kotlinWithoutDescription = (scenario: string) => {
   const { description: _, ...result } = (parse as { golden: Record<string, unknown> }).golden;
   return { success: true, result };
 };
+const swiftUnsupported = (op: string, error_type: string, thing: string) => ({
+  success: false,
+  error: `${op} unsupported: SolanaPayKit has no ${thing}`,
+  error_type,
+});
 const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
   kotlin: new Map<string, unknown>([
     ["base64url.encode :: empty_string", kotlinUnsupported("base64url.encode", "encoding_error")],
@@ -212,7 +217,28 @@ const KNOWN_RUNNER_DIVERGENCES: Record<string, Map<string, unknown>> = {
       { success: false, error: expect.stringContaining("unknown key 'hash'"), error_type: "format_error" },
     ],
   ]),
+  swift: new Map<string, unknown>([
+    ["challenge.format :: basic_challenge", swiftUnsupported("challenge.format", "format_error", "WWW-Authenticate formatter")],
+    ["credential.parse :: basic_credential", swiftUnsupported("credential.parse", "parse_error", "Authorization parser")],
+    ["receipt.parse :: success_receipt", swiftUnsupported("receipt.parse", "parse_error", "Payment-Receipt parser")],
+    ["base64url.encode :: empty_string", swiftUnsupported("base64url.encode", "encoding_error", "public base64url encoder")],
+    ["base64url.decode :: empty_string", swiftUnsupported("base64url.decode", "encoding_error", "public base64url decoder")],
+    ["challenge.id :: required_fields_only", swiftUnsupported("challenge.id", "generation_error", "challenge-id generator")],
+  ]),
 };
+
+describe("mpp-protocol conformance (spawned runner failure)", () => {
+  it("a missing swift executable matches no known swift divergence", async () => {
+    const adapter = spawnedProtocolAdapter({
+      language: "swift",
+      command: ["mpp-protocol-runner-missing"],
+      cwd: process.cwd(),
+    });
+    const response = await adapter.runProtocolRequest({ op: "challenge.format", input: {} });
+    expect(response).toMatchObject({ success: false, error_type: "runner_error" });
+    expect([...KNOWN_RUNNER_DIVERGENCES.swift.values()]).not.toContainEqual(response);
+  });
+});
 
 // Ops the runner implements run every case; the rest run only the smoke slice.
 const IMPLEMENTED_OPS: Record<string, Set<string>> = {
