@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PayKit\Tests;
 
+use PayKit\Config;
 use PayKit\Exception\MixedCurrenciesException;
 use PayKit\Exception\ProtocolIncompatibleException;
 use PayKit\Gate;
@@ -98,6 +99,14 @@ final class GateTest extends TestCase
         );
         $this->assertFalse($g->accepts(Protocol::X402));
         $this->assertTrue($g->accepts(Protocol::Mpp));
+    }
+
+    public function testAcceptsDefersToConfigWhenInherited(): void
+    {
+        $g = new Gate(amount: Price::usd('1.00'));
+        $cfg = new Config(accept: [Protocol::Mpp], preflight: false);
+        $this->assertFalse($g->accepts(Protocol::X402, $cfg));
+        $this->assertTrue($g->accepts(Protocol::Mpp, $cfg));
     }
 
     public function testPayoutNullForUnaddressedRecipient(): void

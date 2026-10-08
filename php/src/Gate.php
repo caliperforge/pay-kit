@@ -127,13 +127,13 @@ final readonly class Gate
         return count($this->fees) > 0;
     }
 
-    /** Whether this gate admits `$p`; a null `accept` defers to Config. */
-    public function accepts(Protocol $p): bool
+    /** Whether this gate admits `$p`; a null `accept` defers to `$config` when given. */
+    public function accepts(Protocol $p, ?Config $config = null): bool
     {
         if ($p === Protocol::X402 && $this->hasFees()) {
             return false;
         }
-        return $this->accept === null || in_array($p, $this->accept, true);
+        return in_array($p, $this->accept ?? $config?->accept ?? Protocol::cases(), true);
     }
 
     private static function buildFee(int|string $recipient, Price $price, string $kind, Price $amount): Fee
