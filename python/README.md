@@ -523,7 +523,8 @@ pyright
 pytest --cov=solana_pay_kit --cov-fail-under=90
 ```
 
-The pinned-seed instruction-allowlist negatives are opt-in: `just allowlist-gen` (override with `PAY_KIT_ALLOWLIST_GEN_SEED` / `PAY_KIT_ALLOWLIST_GEN_CASES`).
+The pinned-seed instruction-allowlist negatives are opt-in: `just allowlist-gen`
+(override with `PAY_KIT_ALLOWLIST_GEN_SEED` / `PAY_KIT_ALLOWLIST_GEN_CASES`).
 
 The `solana_pay_kit` surface is gated at 90 percent line coverage in CI. The
 `solana_pay_kit.preflight` module is omitted from the gate: it wraps live Solana
