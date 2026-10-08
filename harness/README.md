@@ -95,6 +95,8 @@ server adapter must not re-encode scenario expectations.
 
 ```
 src/
+  artifacts.ts       native/JVM build targets and prebuilt command resolution
+  ci-matrix.ts       generated MPP charge shards and exact-case coverage checks
   contracts.ts        canonical scenario values (amounts, splits, expected status)
   implementations.ts  registry of language adapters (client / server / both)
   process.ts          process spawning + JSON protocol parsing
@@ -113,17 +115,25 @@ runners/<lang>.json   per-SDK conformance runner configs
 - **Scenarios are data.** Canonical values live in `src/contracts.ts` /
   `src/intents/`; adapters never hard-code them. The harness generates the
   client×server matrix from the active scenario set and asserts centrally.
-- **Hub-and-spoke matrix.** CI does not run the full N² cross-product on every
-  PR. Rust is the reference: every enabled client runs against the Rust server,
-  and the Rust client runs against every enabled server. This catches
-  regressions in both directions cheaply. The full cross-product is available
-  locally for protocol-level changes.
+- **Generated MPP charge matrix.** CI runs every eligible charge client/server
+  pair, including same-language pairs. The adapter registry and scenario
+  allowlists determine coverage; job-name filters do not. The matrix planner
+  rejects unknown adapters and missing toolchain mappings. Other intents retain
+  their existing focused jobs.
+- **Replay belongs to the shared runner.** For `charge-idempotent-resubmit`,
+  the runner captures the credential through a loopback proxy while the real
+  client pays the real server, then resubmits it without the client's automatic
+  payment retry. Every charge client can drive this check. The first response
+  must be 200; the replay must be 402 with `signature_consumed`.
+- **Assigned cases must run.** Generated shards set `HARNESS_STRICT_SHARD=1`.
+  A selected scenario with no eligible pair is an error, even if another
+  shard could run it. Local broad selections may still skip ineligible pairs.
 - **Structural first, on-chain for settlement.** The structural tier gives fast,
   broad interop coverage; the on-chain tier is reserved for the schemes whose
   correctness depends on program execution.
 - **Environment in, JSON out.** Adapters are language-agnostic processes, so a
-  new language joins by implementing the contract — no harness changes beyond
-  registration.
+  new language joins by implementing the contract, registering its adapter,
+  and declaring its CI toolchain requirements.
 
 ### Shared environment (selected)
 
@@ -185,8 +195,10 @@ schemes against the same mainnet-fork bootstrap in `src/onchain/surfnet.ts`.
 - **Treasury owner is pinned to the deployed (mainnet-build) program.** The
   on-chain tier asserts against `ATA(Cs2zdf…, mint)`; a localnet-build program
   with a different `TREASURY_OWNER` would not match.
-- **Default CI is a smoke matrix, not exhaustive.** Hub-and-spoke coverage is
-  intentional; the full cross-product runs only on demand.
+- **Coverage follows declared capabilities.** The generated MPP charge matrix
+  covers registered adapters and scenario allowlists, not every public framework
+  integration. Its replay assertion checks HTTP rejection, not application
+  side-effect counts. Other intents still use focused CI matrices.
 - **Surfpool ≠ a real cluster.** Forking approximates mainnet feature flags and
   account state; it is not a substitute for devnet/mainnet integration on the
   real network.
@@ -203,7 +215,7 @@ schemes against the same mainnet-fork bootstrap in `src/onchain/surfnet.ts`.
   accepted off-chain is one that actually settles.
 - Make adding a language cheap: implement the process-adapter contract, register
   it, done.
-- Keep CI signal fast and deterministic (hub-and-spoke; pure-JSON adapter I/O).
+- Keep CI coverage explicit and deterministic (generated shards; pure-JSON adapter I/O).
 
 ## Non-goals
 
@@ -248,6 +260,52 @@ X402_HARNESS_CROSS_SERVER=1 pnpm test cross-server-scenarios.test.ts
 SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc> pnpm test:onchain
 ```
 
+### MPP charge CI coverage
+
+`.github/workflows/mpp-matrix.yml` generates its jobs from the adapter registry
+and charge scenarios. Inspect the plan or run the fast planning tests:
+
+```bash
+pnpm exec tsx emit-ci-matrix.ts
+pnpm exec vitest run test/ci-matrix.test.ts test/replay.test.ts test/guards.test.ts
+```
+
+Each shard carries its exact case keys in `MPP_HARNESS_EXPECTED_CASES`. The e2e
+runner checks both registration and execution against that set. CI does not use
+`--testNamePattern`; scenario selection comes from the generated shard.
+
+The workflow uses `fail-fast: false` so one failing SDK does not cancel coverage
+of the others. The final **MPP charge coverage** job requires planning and every
+shard to succeed; use that stable check name for branch protection.
+
+### Build once, execute the artifacts
+
+Each matrix workflow builds `@solana/mpp` once and publishes its portable `dist`.
+Native producers build the union of required adapters once per OS/architecture,
+then publish tar archives that preserve executable permissions. Go protocol aliases
+reuse the same binary; Kotlin artifacts include the installed distribution's JARs.
+The legacy harness also packages its compiled conformance runners.
+
+Test jobs download these outputs and set `HARNESS_PREBUILT_DIR`. They execute the
+binaries directly: no `cargo run`, `go run`, `swift run`, or Gradle payment-adapter
+builds inside a test leg. Missing or unclassified artifacts fail explicitly rather
+than falling back to a compiler. Cargo caches accelerate producers but are never
+treated as evidence that an executable is ready.
+
+Without `HARNESS_PREBUILT_DIR`, local developer commands retain their build-on-demand
+behavior. To exercise packaged Go adapters locally:
+
+```bash
+node --import tsx build-adapters.ts --clients go --servers go --out ../.harness-artifacts
+HARNESS_PREBUILT_DIR="$PWD/../.harness-artifacts" \
+  MPP_HARNESS_CLIENTS=go MPP_HARNESS_SERVERS=go \
+  MPP_HARNESS_SCENARIOS=charge-idempotent-resubmit pnpm test test/e2e.test.ts
+```
+
+Use `--conformance swift,kotlin` to package those runners when their toolchains are
+available. Compilation is shared within each workflow run; independent language
+unit-test workflows retain their own build environments.
+
 ---
 
 ## Adding an implementation
@@ -262,4 +320,7 @@ SURFPOOL_DATASOURCE_RPC_URL=<mainnet-rpc> pnpm test:onchain
    MPP_HARNESS_CLIENTS=<id> MPP_HARNESS_SERVERS=rust pnpm test
    MPP_HARNESS_CLIENTS=rust MPP_HARNESS_SERVERS=<id> pnpm test
    ```
-5. Enable by default only once the focused matrix is stable.
+5. Add its toolchain mapping in `src/ci-matrix.ts` and, for a new language, its
+   setup in `.github/workflows/mpp-matrix.yml`. Run the planning tests and inspect
+   the emitted matrix. Registered charge adapters join CI regardless of their
+   local `enabled` default; do not remove failing cases to make a shard green.
