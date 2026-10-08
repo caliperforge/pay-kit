@@ -44,7 +44,8 @@ ATA_PROGRAM = Pubkey.from_string(ASSOCIATED_TOKEN_PROGRAM)
 SOL = (False, False)
 SPONSORED_SOL = (False, True)
 USDC = (True, False)
-BASES = (SOL, SPONSORED_SOL, USDC)
+SPONSORED_USDC = (True, True)
+BASES = (SOL, SPONSORED_SOL, USDC, SPONSORED_USDC)
 
 Case = tuple[str, ChargeRequest, MethodDetails, str | None]
 
@@ -77,19 +78,24 @@ def _sol_transfer(source: Pubkey, destination: Pubkey, lamports: int) -> Instruc
     return transfer(TransferParams(from_pubkey=source, to_pubkey=destination, lamports=lamports))
 
 
+def _token_transfer(source: Pubkey, destination: Pubkey, authority: Pubkey, amount: int) -> Instruction:
+    return Instruction(
+        TOKEN,
+        bytes([12]) + amount.to_bytes(8, "little") + bytes([6]),
+        [
+            AccountMeta(source, False, True),
+            AccountMeta(MINT, False, False),
+            AccountMeta(destination, False, True),
+            AccountMeta(authority, True, False),
+        ],
+    )
+
+
 def _payment(base: _Base) -> Instruction:
     if not base.usdc:
         return _sol_transfer(base.client.pubkey(), base.recipient, base.amount)
-    return Instruction(
-        TOKEN,
-        bytes([12]) + base.amount.to_bytes(8, "little") + bytes([6]),
-        [
-            AccountMeta(_ata(base.client.pubkey()), False, True),
-            AccountMeta(MINT, False, False),
-            AccountMeta(_ata(base.recipient), False, True),
-            AccountMeta(base.client.pubkey(), True, False),
-        ],
-    )
+    client = base.client.pubkey()
+    return _token_transfer(_ata(client), _ata(base.recipient), client, base.amount)
 
 
 def _around(rng: random.Random, base: _Base, extra: Instruction) -> _Built:
@@ -122,9 +128,14 @@ def _compile(base: _Base, instructions: list[Instruction]) -> Case:
 
 
 def _drain(rng: random.Random) -> _Built:
-    base = _base(rng, *SPONSORED_SOL)
-    lamports = rng.choice((base.amount, base.amount - 1, base.amount + 1, 0, 2**64 - 1))
-    return base, [_sol_transfer(base.fee_payer.pubkey(), base.recipient, lamports)]
+    base = _base(rng, *rng.choice((SPONSORED_SOL, SPONSORED_USDC)))
+    amount = rng.choice((base.amount, base.amount - 1, base.amount + 1, 0, 2**64 - 1))
+    payer = base.fee_payer.pubkey()
+    if not base.usdc:
+        return base, [_sol_transfer(payer, base.recipient, amount)]
+    client = base.client.pubkey()
+    source, authority = rng.choice(((_ata(payer), payer), (_ata(client), payer), (_ata(payer), client)))
+    return base, [_token_transfer(source, _ata(base.recipient), authority, amount)]
 
 
 def _extra_system_transfer(rng: random.Random) -> _Built:
@@ -175,7 +186,7 @@ def _oversized_compute_budget(rng: random.Random) -> _Built:
     shapes: list[tuple[tuple[tuple[bool, bool], ...], bytes, list[AccountMeta]]] = [
         (BASES, limit(rng.choice((MAX_COMPUTE_UNIT_LIMIT + 1, 2**32 - 1))), []),
         ((SOL, USDC), price(MAX_COMPUTE_UNIT_PRICE_MICROLAMPORTS + 1), []),
-        ((SPONSORED_SOL,), price(MAX_COMPUTE_UNIT_PRICE_MICROLAMPORTS_FEE_SPONSORED + 1), []),
+        ((SPONSORED_SOL, SPONSORED_USDC), price(MAX_COMPUTE_UNIT_PRICE_MICROLAMPORTS_FEE_SPONSORED + 1), []),
         (BASES, bytes([0]) + valid_limit[1:], []),
         (BASES, valid_limit, [AccountMeta(_key(rng).pubkey(), False, False)]),
     ]
