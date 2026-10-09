@@ -877,10 +877,10 @@
       }
     },
     {
-      "name": "year_0000",
-      "description": "Year 0000, the smallest four-digit year",
+      "name": "year_0001",
+      "description": "Year 0001, the smallest year every SDK represents",
       "tags": ["happy-path", "year-boundary"],
-      "input": "0000-01-01T00:00:00Z",
+      "input": "0001-01-01T00:00:00Z",
       "tests": {
         "parse": true
       }
