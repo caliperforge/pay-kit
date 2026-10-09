@@ -174,20 +174,12 @@ func TestNewPaymentCredentialRejectsUnmarshalablePayload(t *testing.T) {
 // Every scenario in the file is run. There is no slice to select and no
 // scenario to skip.
 //
-// The verdict is read out of this package's own `PaymentChallenge.IsExpired`,
-// not out of a bare `time.Parse`. `IsExpired` fails closed — it returns true
-// both for "parsed, and in the past" and for "did not parse" — but `now` is a
-// parameter, so passing a reference instant before every year the corpus can
-// express (0000..9999) makes every parse success sort strictly after `now`.
-// IsExpired then returns false for a parse success and true for a parse
-// failure, and the verdict comes from the shipped function.
+// The verdict is read from `time.Parse` with `time.RFC3339`, the parser
+// `IsExpired` calls. It is not read from `IsExpired` itself, which treats an
+// empty `expires` as "no expiry" by design and so cannot report a parse
+// failure for "".
 
 const conformanceCorpusPath = "../../../../harness/vectors/mpp-protocol/expires.json"
-
-// rfc3339ConformanceReference is far enough in the past that every instant the
-// corpus can express sorts after it, so IsExpired's time comparison never fires
-// on a parse success and only the parse outcome is observed.
-var rfc3339ConformanceReference = time.Date(-9999, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 type rfc3339Scenario struct {
 	Name        string          `json:"name"`
@@ -248,11 +240,11 @@ func TestRFC3339ConformanceCorpus(t *testing.T) {
 	for _, scenario := range loadRFC3339Vectors(t) {
 		t.Run(scenario.Name, func(t *testing.T) {
 			t.Parallel()
-			challenge := PaymentChallenge{Expires: scenario.Input}
-			accepted := !challenge.IsExpired(rfc3339ConformanceReference)
+			_, err := time.Parse(time.RFC3339, scenario.Input)
+			accepted := err == nil
 			want := scenario.wantsAccept(t)
 			if accepted != want {
-				t.Fatalf("%s (%s): input %q — corpus expects %s, IsExpired reports %s",
+				t.Fatalf("%s (%s): input %q — corpus expects %s, time.Parse reports %s",
 					scenario.Name, scenario.Description, scenario.Input,
 					conformanceVerdictName(want), conformanceVerdictName(accepted))
 			}
