@@ -5,34 +5,34 @@ vectors vendored at `harness/vectors/mpp-protocol/expires.json` (issue #111).
 
 - Oracle: RFC 3339, pinned text sha256 `9ab2b8864a85dca73a88f49b0927bc7bc85f596926e4fd1890905777924e700a` (35,064 B).
 - Vectors: `harness/vectors/mpp-protocol/expires.json`, version `2.0.0`, **124 scenarios** (54 ACCEPT,
-  70 REJECT), 36,470 B, sha256 `72f90dc9c9e6d7c373fcae7893e1d9f0c537ecc69fc7397773d5b006a78e0e3d`.
+  70 REJECT), 36,480 B, sha256 `613fdb3f31faffd65db0bdd44693112e5c8c2b99655455f3549900afb19696cc`.
 - Parse paths: go, lua, php, python, ruby, rust, typescript; typescript has two call sites, so eight.
 - Operation `expires.parse`. Verdict axis ACCEPT or REJECT. Cells: 124 x 8 = 992.
 - Source lines resolve at `48ea8aa43fb555d55fd9c3365a4a045ea96f1618`, this branch merged with main
   `c143bfabef82dbdf01dcff7a52ab29bf166d7eb4`.
 - #286 (`parseRfc3339`) is not on main; applied to the worktree it takes both TypeScript rows to 6 (leap
   seconds only).
-- php was not re-executed: composer is absent from the host, `git diff --name-only 16777d46 c143bfab -- php/`
-  returns no paths, so the row is carried from the `16777d46` measurement.
+- Counts were re-run after review: `year_0000` became `year_0001` (#315 and #320 reject year 0 on purpose),
+  and the go runner reads its verdict from `time.Parse`. php was executed on this run, not carried.
 - Sources, upstream shas, licences, the dedupe rule and every settled scenario not shipped are in
   `harness/vectors/mpp-protocol/README.md`.
 
 ## Headline
 
-**The corpus is not green: 120 of 992 cells diverge, 12.1%. One parse path of eight passes all 124.**
+**The corpus is not green: 117 of 992 cells diverge, 11.8%. One parse path of eight passes all 124.**
 Every divergence is a verdict disagreement, not a crash; no cell produced anything but ACCEPT or REJECT.
 
 | parse path | scenarios | pass | **fail** |
 |---|---|---|---|
 | rust | 124 | 124 | **0** |
-| python | 124 | 115 | **9** |
-| go | 124 | 108 | **16** |
+| python | 124 | 116 | **8** |
+| go | 124 | 109 | **15** |
 | lua | 124 | 108 | **16** |
-| php | 124 | 107 | **17** |
+| php | 124 | 108 | **16** |
 | ruby | 124 | 106 | **18** |
 | typescript, charge call site | 124 | 102 | **22** |
 | typescript, session call site | 124 | 102 | **22** |
-| **total** | **992** | **872** | **120** |
+| **total** | **992** | **875** | **117** |
 
 **Scope.** Every scenario in the file is an `expires` verdict, so there is no filter and no skip; each
 tree asserts that the count it exercised equals the count in the file. The 104 settled `full-date` and
@@ -54,10 +54,10 @@ expression the SDK delegates to. The harness contains no RFC 3339 parser written
 | tree | parse path (file:line) | verdict source | runtime | **fail of 124** |
 |---|---|---|---|---|
 | rust | `rust/crates/kit/src/mpp/protocol/core/challenge.rs:173-184` `PaymentChallenge::is_expired` to `time::OffsetDateTime::parse(s, &Rfc3339)` | `delegated-parser` | `cargo 1.96.1`, `time` crate `0.3.55` | **0** |
-| python | `python/src/solana_pay_kit/protocols/mpp/core/types.py:28` `_parse_rfc3339` (regex `_RFC3339_RE` at `:17`, then `datetime.fromisoformat`) | `repo-parser` | `Python 3.12.13` | **9** |
-| go | `go/protocols/mpp/wire/challenge.go:110-119` `PaymentChallenge.IsExpired(now)` | `repo-parser` | `go1.26.5 darwin/arm64` | **16** |
+| python | `python/src/solana_pay_kit/protocols/mpp/core/types.py:28` `_parse_rfc3339` (regex `_RFC3339_RE` at `:17`, then `datetime.fromisoformat`) | `repo-parser` | `Python 3.12.13` | **8** |
+| go | `go/protocols/mpp/wire/challenge.go:114` `time.Parse(time.RFC3339, …)`, called by `PaymentChallenge.IsExpired(now)` | `delegated-parser` | `go1.26.5 darwin/arm64` | **15** |
 | lua | `lua/pay_kit/protocols/mpp/expires.lua:27` `M.parse_rfc3339` | `repo-parser` | `Lua 5.5.1` | **16** |
-| php | `php/src/PayCore/Rfc3339Parser.php:37` `Rfc3339Parser::parse` | `repo-parser` | `PHP 8.5.9 (cli)` | **17** |
+| php | `php/src/PayCore/Rfc3339Parser.php:37` `Rfc3339Parser::parse` | `repo-parser` | `PHP 8.5.9 (cli)` | **16** |
 | ruby | `ruby/lib/pay_core/rfc3339_parser.rb:28` `Rfc3339Parser.parse` | `repo-parser` | `ruby 4.0.6` | **18** |
 | typescript, charge | `typescript/packages/mpp/src/client/Charge.ts:402` `assertChallengeNotExpired` to `new Date(expires).getTime()` at `:404` | `delegated-parser` | `node v26.0.0` | **22** |
 | typescript, session | `typescript/packages/mpp/src/server/Session.ts:356` `assertChallengeOpenNotExpired` to `Date.parse(expires)` at `:358` | `delegated-parser` | `node v26.0.0` | **22** |
@@ -67,11 +67,10 @@ expression the SDK delegates to. The harness contains no RFC 3339 parser written
 `0.3.x` is current; this run resolved `0.3.55`. pay-kit's Lua rockspecs target Lua 5.1 and 5.4; this run
 used Lua 5.5.1.
 
-Two SDKs carry a second RFC 3339 grammar. Both are reachable; neither is counted in the 992.
+Python carries a second RFC 3339 grammar. It is reachable and not counted in the 992.
 
 | tree | second path | why it exists |
 |---|---|---|
-| go | raw `time.Parse(time.RFC3339, v)` | isolates stdlib behaviour from the wrapper's early-return guard (finding 3) |
 | python | `_ISO8601_RE` at `headers.py:32`, used at `headers.py:229` to gate receipt timestamps | the SDK's second RFC 3339 grammar (finding 5) |
 
 **Python 3.9 has no measurement.** `types.py:7` executes `from datetime import UTC` and raises
@@ -163,7 +162,9 @@ rejected, so the defect is specific to the leap-second form.
 tests `TrimSpace`, so the early-return class is empty or whitespace-only, and the value handed to
 `time.Parse` is untrimmed, which is why a trailing-newline input passes in go. `empty_string` is corpus
 REJECT: six trees reject it, go reports ACCEPT, and that one vector is the whole difference between the
-go wrapper and raw `time.Parse`, which errors on `""` and agrees on every other input.
+go wrapper and raw `time.Parse`, which errors on `""` and agrees on every other input. The go runner
+reads its verdict from `time.Parse`, so the corpus scores go's parser; the `IsExpired` early return is
+reported here and not counted.
 
 **A semantic question, not a plain defect.** `IsExpired` is a field-level surface where `expires: ""`
 means *no expiry set*, not *malformed*; the other six drive the parser, which rejects `""` as a
@@ -256,7 +257,7 @@ The limit is real and sits one digit further along. Executed against PHP 8.5.9:
 
 All five rows are shipped vectors: `jsts_date_time_001`, `secfrac_7_digits`, `secfrac_9_digits`,
 `go_longfrac_10digits_0000000000`, `go_longfrac_16digits_9999999999999999`. All five are corpus ACCEPT,
-so php's rejection of the last two is two of its 17 divergences. Two mechanisms, two lines: the regex at
+so php's rejection of the last two is two of its 16 divergences. Two mechanisms, two lines: the regex at
 `php/src/PayCore/Rfc3339Parser.php:26` bounds `time-secfrac` to `(?:\.(\d{1,9}))?`, producing the
 rejection past 9; the truncation is `substr($frac, 0, 6)` at `:86`. On the same 9-digit input rust, go,
 python and ruby preserve all nine digits (ruby `nsec=123456789`); lua and typescript truncate by return
@@ -267,7 +268,7 @@ type. **php is the only tree that loses fractional digits it claims to support.*
 `_RFC3339_RE` at `types.py:17`, gating `_parse_rfc3339` at `types.py:28`, is the wired path.
 `_ISO8601_RE` at `headers.py:32`, used at `headers.py:229` to gate receipt timestamps, is a second
 grammar in the same package. Same interpreter, same run, same 124 inputs: **`_ISO8601_RE` disagrees with
-the corpus on 33 of 124 where the wired `_parse_rfc3339` disagrees on 9.**
+the corpus on 33 of 124 where the wired `_parse_rfc3339` disagrees on 8.**
 
 Both directions fire. `_ISO8601_RE` is purely lexical and accepts calendar-impossible dates that
 `_parse_rfc3339` rejects: `feb_30`, `month_13`, `non_leap_year_1900_feb_29`, `minute_60`,
@@ -405,19 +406,19 @@ what.**
 ## Reproduce
 
 **Six of the seven trees exit non-zero**, so the commands are not chained with `&&`. For five that is the
-correct result; php's `127` is an absent runner, not a divergence. **Every line states the number of
+correct result. **Every line states the number of
 tests it must run**, because a wrong `-run` pattern or a stale path exits 0 on several of these
 toolchains.
 
 ```
 # 1. Hash gate. If it does not match, nothing below applies. From the repository root:
 shasum -a 256 harness/vectors/mpp-protocol/expires.json
-# 72f90dc9c9e6d7c373fcae7893e1d9f0c537ecc69fc7397773d5b006a78e0e3d      exit 0
+# 613fdb3f31faffd65db0bdd44693112e5c8c2b99655455f3549900afb19696cc      exit 0
 
 # 2. The seven trees. Run each; none depends on another.
 
 # go  from the repository root; -C go because the go module root is go/. -v or no count is printed
-go -C go test -v ./protocols/mpp/wire/ -run TestRFC3339ConformanceCorpus   # exit 1, 16 FAIL of 124
+go -C go test -v ./protocols/mpp/wire/ -run TestRFC3339ConformanceCorpus   # exit 1, 15 FAIL of 124
 
 # python  from python/
 pytest tests/test_expires.py                                              # exit 1, 9 FAIL of 124
@@ -431,8 +432,8 @@ npx vitest run packages/mpp/src/__tests__/client-charge-validation.test.ts # exi
 # ruby  from ruby/;  needs ruby >= 3.1, see the prerequisites table
 bundle exec ruby test/pay_core/expires_rfc3339_test.rb                    # exit 1, 18 FAIL of 124
 
-# php  from php/;  composer install first. NOT RE-RUN on this pass: composer absent, exit 127
-./vendor/bin/phpunit tests/PayCore/Rfc3339Test.php                        # 17 FAIL of 124, carried
+# php  from php/;  composer install first
+./vendor/bin/phpunit tests/PayCore/Rfc3339Test.php                        # exit 1, 16 FAIL of 124
 
 # lua  from lua/;  the suite's runner is tests/test_helper.lua in-repo, not busted
 lua -e "package.path=table.concat({'./?.lua','./?/init.lua',package.path},';'); \
@@ -440,7 +441,7 @@ lua -e "package.path=table.concat({'./?.lua','./?/init.lua',package.path},';'); 
 #   exit 1, 1 of 8 tests fails, printing "16 of 124 vectors diverge"
 ```
 
-The numbers those commands printed, not a prediction; php's are carried from `16777d46`, per the header.
+The numbers those commands printed, not a prediction.
 The `fail` column counts corpus vectors and equals the headline table row for row, except typescript:
 the `npx vitest` line drives `parseRfc3339` under #286 and returns 6, where the headline rows are the
 merged tree's 22 each. No adapter implements `expires.parse` (`harness/src/protocol/README.md:68`), so those two
@@ -456,12 +457,12 @@ node -e 'const s=require("./harness/vectors/mpp-protocol/expires.json").scenario
 
 | tree | working directory | exit | tests run | corpus vectors driven | pass | **fail** |
 |---|---|---|---|---|---|---|
-| go | repo root | 1 | 125 (`-v` to see them) | 124 | 108 | **16** |
-| python | `python/` | 1 | 144 | 124 | 135 | **9** |
+| go | repo root | 1 | 125 (`-v` to see them) | 124 | 109 | **15** |
+| python | `python/` | 1 | 144 | 124 | 136 | **8** |
 | rust | `rust/` | **0** | 3 | 124 | 3 | **0** |
 | typescript | `typescript/` | 1 | 148 | 124 | 142 | **6**, `parseRfc3339` under #286 |
 | ruby | `ruby/` | 1 | 130 | 124 | 112 | **18** |
-| php | `php/` | — carried | 145 | 124 | 128 | **17** |
+| php | `php/` | 1 | 145 | 124 | 129 | **16** |
 | lua | `lua/` | 1 | 8 | 124 | 7 | **1**, reporting 16 of 124 diverging |
 
 **Every tree drives all 124 scenarios. There is no filter and no skip.** Six enforce it by assertion, as
@@ -500,13 +501,13 @@ Each entry's output prints in full between the delimiters, greppable with `| gre
 from the repository root, the eight delimiters printed:
 
 ```
-===== gate exit 0 =====        # 72f90dc9…e0e3d
-===== go exit 1 =====          # 125 "=== RUN" (1 parent + 124 subtests), 108 PASS, 16 FAIL
-===== python exit 1 =====      # 9 failed, 135 passed  (144)
+===== gate exit 0 =====        # 613fdb3f…696cc
+===== go exit 1 =====          # 125 "=== RUN" (1 parent + 124 subtests), 109 PASS, 15 FAIL
+===== python exit 1 =====      # 8 failed, 136 passed  (144)
 ===== rust exit 0 =====        # running 3 tests; 3 passed, 0 failed
 ===== typescript exit 1 =====  # 6 failed | 142 passed  (148)
 ===== ruby exit 1 =====        # 130 runs, 155 assertions, 18 failures, 0 errors
-===== php exit 127 =====       # ./vendor/bin/phpunit: no such file or directory
+===== php exit 1 =====         # Tests: 145, Assertions: 153, Failures: 16
 ===== lua exit 1 =====         # 7 tests passed, 0 skipped, 1 failed, "16 of 124 vectors diverge"
 ```
 
@@ -521,7 +522,7 @@ Every row was established by running the command above, not by reading a manifes
 | rust | a resolvable workspace. **It does not resolve offline**: `cargo test --offline` fails on a `solana-bpf-loader-program` version conflict via `litesvm`, pre-existing and unrelated to these vectors | `cargo --version` gives `1.96.1` |
 | typescript | `pnpm install` in `typescript/` | `node --version` gives `v26.0.0` |
 | ruby | `bundle install`, **and ruby >= 3.1**, see below | `ruby --version` |
-| php | `composer install` in `php/`. **Not met on this host**, so the row is carried | `php --version` gives `8.5.9`; `which composer` exits 1 |
+| php | `composer install` in `php/` | `php --version` gives `8.5.9` |
 | lua | none. The runner is `lua/tests/test_helper.lua`, in-repo; busted is not a dependency. **`lua tests/run.lua` (the whole suite) additionally needs `luasodium` from luarocks; the single-spec invocation above does not** | `lua -v` gives `Lua 5.5.1` |
 
 **The ruby row.** `bundle exec` cannot run under ruby 2.6.10: the gemspec requires `ed25519 ~> 1.4`
