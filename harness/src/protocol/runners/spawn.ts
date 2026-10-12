@@ -82,7 +82,15 @@ export function spawnedProtocolAdapter(runner: DiscoveredProtocolRunner): Protoc
         child.on("error", (err) => {
           resolve({ success: false, error: `spawn failed: ${err.message}`, error_type: "runner_error" });
         });
-        child.on("close", () => {
+        child.on("close", (code) => {
+          if (code !== 0) {
+            resolve({
+              success: false,
+              error: `runner exited ${code}; stderr: ${stderr.slice(-512)}`,
+              error_type: "runner_error",
+            });
+            return;
+          }
           const line = stdout.trim().split("\n").filter(Boolean).pop();
           if (!line) {
             resolve({

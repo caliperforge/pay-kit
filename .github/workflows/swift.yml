@@ -41,6 +41,13 @@ jobs:
         env:
           MPP_CONFORMANCE_LANGUAGES: swift
         run: pnpm exec vitest run test/conformance.test.ts
+      - name: Build Swift protocol runner
+        run: swift build -c release --product mpp-protocol-runner
+      - name: Run Swift mpp-protocol conformance vectors
+        working-directory: harness
+        env:
+          MPP_CONFORMANCE_LANGUAGES: swift
+        run: pnpm exec vitest run test/protocol-conformance.test.ts
       - name: Run Swift client harness smoke against TypeScript server
         working-directory: harness
         env:
