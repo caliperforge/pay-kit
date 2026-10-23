@@ -21,7 +21,7 @@ use std::str::FromStr;
 
 use serde_json::{json, Map, Value};
 use solana_pay_kit::core::store::{
-    ChannelState, ChannelStore, MemoryChannelStore, CHANNEL_STATE_SCHEMA_VERSION,
+    ChannelState, ChannelStore, MemoryChannelStore, ProcessedUse, CHANNEL_STATE_SCHEMA_VERSION,
 };
 use solana_pay_kit::core::tx::{TxV1Mode, TxVersion};
 use solana_pay_kit::mpp::client::session::{
@@ -29,7 +29,7 @@ use solana_pay_kit::mpp::client::session::{
     PaymentChannelSessionOpenOptions,
 };
 use solana_pay_kit::mpp::protocol::intents::session::{
-    SessionAction, SessionAuthentication, SessionRequest,
+    SessionAction, SessionAuthentication, SessionRequest, SignedVoucher, UsePayload,
 };
 use solana_pay_kit::mpp::server::session::{
     testkit, SessionConfig, SessionOpenContext, SessionServer, Split, VoucherSigner,
@@ -70,12 +70,29 @@ fn signer_from(input: &Value, key: &str) -> Result<MemorySigner, String> {
     MemorySigner::from_bytes(&bytes).map_err(|e| format!("invalid {key}: {e}"))
 }
 
+/// The 32-byte Ed25519 seed of the 64-byte secret key at `input.key`.
+fn secret_seed(input: &Value, key: &str) -> Result<[u8; 32], String> {
+    let bytes: Vec<u8> = input
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("input.{key} missing"))?
+        .iter()
+        .map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+        .collect::<Option<_>>()
+        .ok_or_else(|| format!("input.{key} must be bytes"))?;
+    bytes
+        .get(..32)
+        .and_then(|seed| seed.try_into().ok())
+        .ok_or_else(|| format!("input.{key} must be a 64-byte secret key"))
+}
+
 /// The kit session server `server` describes, over `store`.
-fn kit_server(
+fn kit_server<S: ChannelStore>(
     server: &Value,
     fee_payer: Option<MemorySigner>,
-    store: MemoryChannelStore,
-) -> Result<SessionServer<MemoryChannelStore>, String> {
+    operator_key: Option<[u8; 32]>,
+    store: S,
+) -> Result<SessionServer<S>, String> {
     let text = |key: &str| {
         server
             .get(key)
@@ -153,6 +170,7 @@ fn kit_server(
         splits,
         token_program,
         fee_payer_signer,
+        operator_signing_key: operator_key.map(|seed| ed25519_dalek::SigningKey::from_bytes(&seed)),
         ..SessionConfig::default()
     };
     let mut versions: Vec<TxVersion> = match server.get("transactionVersions") {
@@ -168,6 +186,36 @@ fn kit_server(
         other => return Err(format!("the kit cannot accept exactly {other:?}")),
     };
     Ok(SessionServer::new(config, store).with_tx_v1(mode))
+}
+
+/// `channel.processedUses`: requests the server already charged.
+fn processed_uses(channel: &Value) -> Result<Vec<ProcessedUse>, String> {
+    let Some(entries) = channel.get("processedUses") else {
+        return Ok(Vec::new());
+    };
+    let entries = entries
+        .as_array()
+        .ok_or("channel.processedUses is not an array")?;
+    entries
+        .iter()
+        .map(|entry| {
+            let text = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("channel.processedUses[].{key} missing"))
+            };
+            Ok(ProcessedUse {
+                challenge_id: text("challengeId")?,
+                idempotency_key: text("idempotencyKey")?,
+                cumulative: u64_field(entry, "cumulativeAmount")?
+                    .ok_or("channel.processedUses[].cumulativeAmount missing")?,
+                voucher_signature: text("voucherSignature")?,
+                amount: u64_field(entry, "amount")?,
+            })
+        })
+        .collect()
 }
 
 /// The server's per-channel state (`channel`) as the kit stores it.
@@ -225,7 +273,7 @@ fn stored_channel(channel: &Value) -> Result<ChannelState, String> {
         spent_amount: number("spentAmount")?,
         settled_on_chain: number("settledOnChain")?,
         distributed_on_chain: 0,
-        processed_uses: vec![],
+        processed_uses: processed_uses(channel)?,
         processed_topup_signatures: vec![],
         next_delivery_sequence: 0,
         pending_deliveries: vec![],
@@ -257,7 +305,10 @@ fn code_for(message: &str) -> Option<&'static str> {
         || has("operator close requires")
     {
         "close-authorization"
-    } else if has("authentication") || has("does not authenticate") {
+    } else if has("authentication")
+        || has("does not authenticate")
+        || has("only valid for operator-signed")
+    {
         "authentication-invalid"
     } else if has("fee payer does not match") || has("fee payer must be") {
         "fee-payer-mismatch"
@@ -279,6 +330,8 @@ fn code_for(message: &str) -> Option<&'static str> {
         || has("additionalamount must be positive")
         || has("does not match additionalamount")
         || has("insufficient authorized voucher availability")
+        || has("charge amount must be positive")
+        || has("used for a different request")
     {
         "amount-mismatch"
     } else if has("open transaction")
@@ -297,7 +350,7 @@ fn code_for(message: &str) -> Option<&'static str> {
         "voucher-signature"
     } else if has("must exceed watermark") || has("already accepted") {
         "cumulative-amount-mismatch"
-    } else if has("exceeds deposit") {
+    } else if has("exceeds deposit") || has("insufficient channel availability") {
         "cumulative-exceeds-deposit"
     } else if has("voucher has expired") {
         "voucher-expired"
@@ -332,7 +385,7 @@ async fn verify(input: &Value) -> Result<Outcome, Rejection> {
             "session verify vector without sessionServerVerify".into(),
         ));
     };
-    let store = MemoryChannelStore::new();
+    let store = std::sync::Arc::new(MemoryChannelStore::new());
     if let Some(channel) = params.get("channel") {
         let state = stored_channel(channel)?;
         store
@@ -345,7 +398,11 @@ async fn verify(input: &Value) -> Result<Outcome, Rejection> {
         .map(|_| signer_from(input, "sessionServerFeePayerSecretKey"))
         .transpose()?;
     let server_json = params.get("server").cloned().unwrap_or(Value::Null);
-    let server = match kit_server(&server_json, fee_payer, store) {
+    let operator_key = input
+        .get("sessionServerOperatorSecretKey")
+        .map(|_| secret_seed(input, "sessionServerOperatorSecretKey"))
+        .transpose()?;
+    let server = match kit_server(&server_json, fee_payer, operator_key, store.clone()) {
         Ok(server) => server,
         Err(e) => return Ok(Outcome::Unsupported(e)),
     };
@@ -376,14 +433,86 @@ async fn verify(input: &Value) -> Result<Outcome, Rejection> {
         }
         SessionAction::TopUp(topup) => testkit::verify_topup_pre_broadcast(&server, topup).await,
         SessionAction::Close(close) => server.process_close(close).await.map(|_| ()),
-        SessionAction::Use(_) => {
-            return Ok(Outcome::Unsupported(
-                "the use action needs an Idempotency-Key and the operator signing key".into(),
-            ))
+        SessionAction::Use(payload) => {
+            let operator = signer_from(input, "sessionServerOperatorSecretKey")?;
+            let voucher = use_voucher(&server, &operator, params, payload)
+                .await
+                .map_err(reject)?;
+            let mut out = Map::new();
+            out.insert(
+                "sessionVoucher".into(),
+                persisted_use(&store, &voucher).await?,
+            );
+            return Ok(Outcome::Accept(out));
         }
     };
     result.map_err(|e| reject(e.to_string()))?;
     Ok(Outcome::Accept(Map::new()))
+}
+
+/// The `sessionVoucher` result (mirrors `persisted_use` in
+/// rust/crates/conformance/src/realize/session.rs) of an accepted `use`, read back from the
+/// store: the channel's persisted cumulative and spent amounts, after
+/// checking that the persisted voucher is the one the kit returned. A kit
+/// that answers with a voucher but does not save it fails here.
+async fn persisted_use(
+    store: &MemoryChannelStore,
+    voucher: &SignedVoucher,
+) -> Result<Value, String> {
+    let stored = store
+        .get_channel(&voucher.data.channel_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("channel missing after use")?;
+    if stored.highest_voucher_signature.as_deref() != Some(voucher.signature.as_str())
+        || stored.cumulative.to_string() != voucher.data.cumulative_amount
+    {
+        return Err(format!(
+            "the returned voucher (cumulative {}) is not the persisted one (cumulative {})",
+            voucher.data.cumulative_amount, stored.cumulative
+        ));
+    }
+    Ok(json!({
+        "channelId": stored.channel_id,
+        "cumulativeAmount": stored.cumulative.to_string(),
+        "spentAmount": stored.spent_amount.to_string(),
+        "signer": voucher.signer,
+    }))
+}
+
+/// Charge a `use`: the challenged `amount` through `process_use`, or the
+/// vector's `meteredAmount` through `authenticate_use` then
+/// `charge_operator_usage` (mirrors `use_voucher` in
+/// rust/crates/conformance/src/realize/session.rs).
+async fn use_voucher<S: ChannelStore>(
+    server: &SessionServer<S>,
+    operator: &MemorySigner,
+    params: &Value,
+    payload: &UsePayload,
+) -> Result<SignedVoucher, String> {
+    let challenge_id = params["challenge"]["id"].as_str().unwrap_or_default();
+    let idempotency_key = params["idempotencyKey"].as_str().unwrap_or_default();
+    let voucher = match u64_field(params, "meteredAmount")? {
+        Some(amount) => {
+            let authenticated = server
+                .authenticate_use(payload, challenge_id, idempotency_key)
+                .await
+                .map_err(|e| e.to_string())?;
+            server
+                .charge_operator_usage(&authenticated, operator, amount, |_| Ok(()))
+                .await
+                .map_err(|e| e.to_string())?
+                .voucher
+        }
+        None => {
+            server
+                .process_use(payload, challenge_id, idempotency_key)
+                .await
+                .map_err(|e| e.to_string())?
+                .voucher
+        }
+    };
+    Ok(voucher)
 }
 
 /// The shared code for a kit session client refusal (mirrors
