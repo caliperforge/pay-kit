@@ -15,9 +15,10 @@
 //!   is the sponsor's key when `server.feePayer` is set. Nothing in the input
 //!   is a precomputed verdict: the testee parses `credential` with its SDK's
 //!   wire types and hands it to the SDK's server.
-//! - build: `sessionOpenBuild` = `{ request, salt, server, challenge }`:
+//! - build: `sessionOpenBuild` = `{ request, salt, deposit, server, challenge }`:
 //!   `request` is the challenge's `SessionRequest`, `salt` the channel salt
-//!   the client's builder takes; `server` / `challenge` are for the judge
+//!   the client's builder takes, `deposit` the deposit its caller
+//!   authorizes; `server` / `challenge` are for the judge
 //!   only. `signerSecretKey` is the payer, `sessionSignerSecretKey` the
 //!   voucher key the client authorizes.
 //!
@@ -34,12 +35,14 @@ use solana_hash::Hash;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pay_kit::core::payment_channels as pc;
 use solana_pay_kit::core::store::{
-    ChannelState, ChannelStore, MemoryChannelStore, CHANNEL_STATE_SCHEMA_VERSION,
+    ChannelState, ChannelStore, MemoryChannelStore, ObservedLifecycle, OnchainObservation,
+    CHANNEL_STATE_SCHEMA_VERSION,
 };
 use solana_pay_kit::core::tx::{ComputeBudget, TxV1Mode, TxVersion};
 use solana_pay_kit::mpp::client::session::{
     create_payment_channel_session_opener, derive_payment_channel_open,
-    DerivePaymentChannelOpenParams, PaymentChannelOpenOptions, PaymentChannelSessionOpenOptions,
+    DerivePaymentChannelOpenParams, OpenBlockhash, PaymentChannelOpenOptions,
+    PaymentChannelSessionOpenOptions, SessionOpenAuthorization,
 };
 use solana_pay_kit::mpp::protocol::intents::session::{
     SessionAction, SessionAuthentication, SessionRequest, SignedVoucher, UsePayload, VoucherData,
@@ -486,7 +489,7 @@ pub fn stored_channel(channel: &Value) -> Result<ChannelState, String> {
     };
     let highest = channel.get("highestVoucher");
     let proof = channel.get("authentication").filter(|v| !v.is_null());
-    Ok(ChannelState {
+    let mut state = ChannelState {
         channel_id: text("channelId")?,
         authorized_signer: text("authorizedSigner")?,
         deposit: number("escrowedAmount")?,
@@ -537,7 +540,26 @@ pub fn stored_channel(channel: &Value) -> Result<ChannelState, String> {
         lifecycle: None,
         schema_version: CHANNEL_STATE_SCHEMA_VERSION,
         extra: Default::default(),
-    })
+    };
+    // The record is the server's view of a channel it confirmed onchain just
+    // now: `status` and `closureStartedAt` are what that read showed.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let lifecycle = match (state.sealed, state.close_requested_at) {
+        (true, started_at) => ObservedLifecycle::Terminal { started_at },
+        (false, Some(started_at)) => ObservedLifecycle::Closing { started_at },
+        (false, None) => ObservedLifecycle::Open,
+    };
+    state.record_onchain_observation(
+        OnchainObservation {
+            slot: None,
+            lifecycle,
+        },
+        now,
+    );
+    Ok(state)
 }
 
 /// A signed voucher JSON (`SignedVoucher` on the wire).
@@ -737,9 +759,27 @@ async fn open_for_request(request: &SessionRequest, build: &OpenBuild) -> Result
     };
     let session =
         MemorySigner::from_bytes(&keys::keypair_bytes(voucher_seed)).map_err(|e| e.to_string())?;
+    // The harness client deposits what the server suggests unless the case
+    // picks a deposit, and trusts the kit server's operator.
+    let deposit = match build.deposit {
+        Some(deposit) => deposit,
+        None => request
+            .suggested_deposit
+            .as_deref()
+            .or(request.minimum_deposit.as_deref())
+            .ok_or("challenge without a deposit")?
+            .parse()
+            .map_err(|e| format!("suggestedDeposit: {e}"))?,
+    };
+    let authorization = match request.method_details.operator.as_deref() {
+        Some(operator) => SessionOpenAuthorization::operator_signed(
+            deposit,
+            Pubkey::from_str(operator).map_err(|e| e.to_string())?,
+        ),
+        None => SessionOpenAuthorization::client_signed(deposit),
+    };
     let open_options = PaymentChannelOpenOptions {
         salt: Some(SALT),
-        deposit: build.deposit,
         open_slot: build.open_slot,
         compute_budget: build
             .budget
@@ -758,6 +798,7 @@ async fn open_for_request(request: &SessionRequest, build: &OpenBuild) -> Result
                 request,
                 payer: client(),
                 authorized_signer: Pubkey::from_str(operator_key).map_err(|e| e.to_string())?,
+                authorization: &authorization,
                 options: open_options.clone(),
             })
             .map_err(|e| format!("derive open: {e}"))?;
@@ -771,11 +812,15 @@ async fn open_for_request(request: &SessionRequest, build: &OpenBuild) -> Result
             )
         }
     };
+    // The kit server's challenge carries the pinned blockhash.
+    let blockhash =
+        OpenBlockhash::from_client_cluster(Hash::from_str(BLOCKHASH).map_err(|e| e.to_string())?);
     let opened = create_payment_channel_session_opener(
         request,
         &payer,
         Box::new(session),
-        None,
+        blockhash,
+        &authorization,
         PaymentChannelSessionOpenOptions {
             open: open_options,
             authentication,
@@ -1593,6 +1638,9 @@ pub struct BuildRecipe {
     pub authorized: Authorized,
     /// Edits of the challenge `SessionRequest` JSON.
     pub edits: Vec<Edit>,
+    /// The latest blockhash of the client's cluster (`rpcFixtures`), when it
+    /// is not the challenged one.
+    pub client_blockhash: Option<&'static str>,
 }
 
 pub fn build_input(recipe: &BuildRecipe) -> Result<Value, String> {
@@ -1611,6 +1659,15 @@ pub fn build_input(recipe: &BuildRecipe) -> Result<Value, String> {
         "sessionOpenBuild": {
             "request": request,
             "salt": SALT.to_string(),
+            // The deposit the caller authorizes (draft-solana-session-00
+            // leaves it to the client); the harness client takes the
+            // server's suggestion.
+            "deposit": recipe
+                .server
+                .suggested_deposit
+                .or(recipe.server.minimum_deposit)
+                .unwrap_or(1_000)
+                .to_string(),
             "server": recipe.server.json(),
             "challenge": {
                 "id": CHALLENGE_ID,
@@ -1621,6 +1678,9 @@ pub fn build_input(recipe: &BuildRecipe) -> Result<Value, String> {
     });
     if recipe.server.sponsored {
         input["sessionServerFeePayerSecretKey"] = keys::secret_json(OPERATOR_SEED);
+    }
+    if let Some(blockhash) = recipe.client_blockhash {
+        input["rpcFixtures"] = json!({ "recentBlockhash": blockhash });
     }
     Ok(input)
 }
@@ -1683,11 +1743,19 @@ pub async fn build(input: &Value) -> Result<Observed, String> {
     let payer = signer_from(input, "signerSecretKey")?;
     let session = signer_from(input, "sessionSignerSecretKey")?;
     let salt = u64_field(params, "salt")?;
+    let deposit = u64_field(params, "deposit")?.ok_or("sessionOpenBuild.deposit missing")?;
+    let fixtures = crate::fixture_rpc::Fixtures::from_input(input)?;
+    let (rpc, _log) = crate::fixture_rpc::rpc_client(&fixtures);
+    let blockhash = match OpenBlockhash::verify(&rpc, &request).await {
+        Ok(blockhash) => blockhash,
+        Err(e) => return Ok(reject_build(e.to_string())),
+    };
     let opened = create_payment_channel_session_opener(
         &request,
         &payer,
         Box::new(session),
-        None,
+        blockhash,
+        &SessionOpenAuthorization::client_signed(deposit),
         PaymentChannelSessionOpenOptions {
             open: PaymentChannelOpenOptions {
                 salt,

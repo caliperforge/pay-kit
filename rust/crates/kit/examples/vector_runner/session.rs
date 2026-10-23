@@ -21,12 +21,13 @@ use std::str::FromStr;
 
 use serde_json::{json, Map, Value};
 use solana_pay_kit::core::store::{
-    ChannelState, ChannelStore, MemoryChannelStore, ProcessedUse, CHANNEL_STATE_SCHEMA_VERSION,
+    ChannelState, ChannelStore, MemoryChannelStore, ObservedLifecycle, OnchainObservation,
+    ProcessedUse, CHANNEL_STATE_SCHEMA_VERSION,
 };
 use solana_pay_kit::core::tx::{TxV1Mode, TxVersion};
 use solana_pay_kit::mpp::client::session::{
-    create_payment_channel_session_opener, PaymentChannelOpenOptions,
-    PaymentChannelSessionOpenOptions,
+    create_payment_channel_session_opener, OpenBlockhash, PaymentChannelOpenOptions,
+    PaymentChannelSessionOpenOptions, SessionOpenAuthorization,
 };
 use solana_pay_kit::mpp::protocol::intents::session::{
     SessionAction, SessionAuthentication, SessionRequest, SignedVoucher, UsePayload,
@@ -232,7 +233,7 @@ fn stored_channel(channel: &Value) -> Result<ChannelState, String> {
     };
     let highest = channel.get("highestVoucher");
     let proof = channel.get("authentication").filter(|v| !v.is_null());
-    Ok(ChannelState {
+    let mut state = ChannelState {
         channel_id: text("channelId")?,
         authorized_signer: text("authorizedSigner")?,
         deposit: number("escrowedAmount")?,
@@ -283,7 +284,26 @@ fn stored_channel(channel: &Value) -> Result<ChannelState, String> {
         lifecycle: None,
         schema_version: CHANNEL_STATE_SCHEMA_VERSION,
         extra: Default::default(),
-    })
+    };
+    // The record is the server's view of a channel it confirmed onchain just
+    // now: `status` and `closureStartedAt` are what that read showed.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let lifecycle = match (state.sealed, state.close_requested_at) {
+        (true, started_at) => ObservedLifecycle::Terminal { started_at },
+        (false, Some(started_at)) => ObservedLifecycle::Closing { started_at },
+        (false, None) => ObservedLifecycle::Open,
+    };
+    state.record_onchain_observation(
+        OnchainObservation {
+            slot: None,
+            lifecycle,
+        },
+        now,
+    );
+    Ok(state)
 }
 
 /// The shared code for a kit session server error (mirrors `code_for` in
@@ -548,11 +568,21 @@ async fn build(input: &Value) -> Result<Outcome, Rejection> {
         .map_err(|e| refuse(format!("invalid challenge: {e}")))?;
     let payer = signer_from(input, "signerSecretKey")?;
     let session = signer_from(input, "sessionSignerSecretKey")?;
+    let rpc_url = input
+        .get("rpcUrl")
+        .and_then(Value::as_str)
+        .ok_or("driver did not inject input.rpcUrl")?;
+    let rpc = solana_rpc_client::rpc_client::RpcClient::new(rpc_url.to_string());
+    let blockhash = OpenBlockhash::verify(&rpc, &request)
+        .await
+        .map_err(|e| refuse(e.to_string()))?;
+    let deposit = u64_field(params, "deposit")?.ok_or("sessionOpenBuild.deposit missing")?;
     let opened = create_payment_channel_session_opener(
         &request,
         &payer,
         Box::new(session),
-        None,
+        blockhash,
+        &SessionOpenAuthorization::client_signed(deposit),
         PaymentChannelSessionOpenOptions {
             open: PaymentChannelOpenOptions {
                 salt: u64_field(params, "salt")?,

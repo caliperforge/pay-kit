@@ -247,6 +247,73 @@ other x402 verifier caps the unit price alone:
   (`typescript/external/x402/typescript/packages/mechanisms/svm/src/exact/facilitator/scheme.ts:1246`).
   SOLA1-340 bounded the product in the TypeScript MPP charge only.
 
+## x402-channel-priority-fee-product-uncapped
+
+**Case:** `vector/x402-upto-verify-priority-fee-over-cap-reject`,
+`vector/x402-upto-verify-implicit-limit-priority-fee-over-cap-reject`,
+`vector/batch-verify-top-up-priority-fee-over-cap-reject`,
+`vector/batch-verify-top-up-implicit-limit-priority-fee-over-cap-reject`
+**SDKs:** typescript
+
+The sponsor co-signs the payer-built channel `open`, `top_up` and refund
+`request_close` as fee payer, so it pays whatever priority fee the payer
+chose. scheme_upto_svm.md: "A sponsor MAY apply a stricter local policy for
+compute-unit limit, compute-unit price, and required-signature count"; Rust
+holds the fee itself (limit times price, the runtime default limit when none
+is declared, or the version-1 header fee) to 2,000 lamports, the same cap
+exact uses (`core::payment_channels::scan_channel_tx_layout`, RULINGS S6).
+The vendored `@x402/svm` 2.26.0 `findCanonicalOpenInstruction` caps each
+field alone, so a 400,000 unit limit at 5,000,000 micro-lamports (a
+2,000,000 lamport fee) and a price-only prefix charged on the implicit limit
+are both accepted.
+
+## upto-settlement-funds-recipient-ata
+
+**Case:** `interop/x402-upto-basic/rust/python`
+**SDKs:** python
+
+An upto settlement co-signed by the fee payer that also creates each
+distribution recipient's token account pays that account's rent, even for a
+zero-amount settlement. A recipient the operator does not control can close
+the account after each settlement and keep the rent. Rust creates only the
+fee payer's payee account and the treasury account, and instead refuses an
+open whose recipients lack a usable token account (scheme_upto_svm.md Phase 3
+settlement readiness), so a payout is never forfeited to the treasury. Python
+appends `create_idempotent_associated_token_account` for every recipient
+(`python/src/solana_pay_kit/protocols/x402/upto/__init__.py:446`). Fix: drop
+the recipient creations and check recipient token accounts before co-signing
+the open; dropping the creations alone would forfeit payouts to accounts that
+do not exist.
+
+## batch-deposit-balance-unchecked
+
+**Case:** `vector/batch-verify-open-unfunded-payer-reject`,
+`vector/batch-verify-top-up-unfunded-payer-reject`
+**SDKs:** typescript
+
+scheme_batch_settlement_svm.md, canonical `open` and `top_up`: "It MUST
+confirm the payer has sufficient tokens". The pay-kit gate broadcasts the
+deposit only after the handler runs, so Rust reads the payer's token account
+and the transaction's blockhash before it reserves the request
+(`X402BatchSettlement::check_deposit_can_land`). The vendored `@x402/svm`
+2.26.0 verify reads no balance; its deposit settle simulates the
+transaction, which the offline harness signer stubs, so the vector cannot
+observe it there.
+
+## upto-client-blockhash-not-checked
+
+**Case:** `vector/x402-upto-build-foreign-blockhash-reject`
+**SDKs:** typescript
+
+A signed Solana transaction is bound to a cluster only by its recent
+blockhash. The upto client signs a channel `open` over the offer's
+`extra.recentBlockhash`, so a hint taken from another cluster yields an open
+that escrows `maxAmount` there instead of on the offer's `network`. Rust signs
+the hint only once its own RPC reports it live (`isBlockhashValid`); the
+vendored upstream `@x402/svm` upto client uses any well-formed hint as is
+(`resolveBlockhash` in the svm mechanism's shared utils). Fix: check the hint
+against the client's RPC, or fetch the client's own blockhash.
+
 ## session-open-initial-voucher-accepted
 
 **Case:** `vector/session-wire-action-open-initial-voucher-reject`

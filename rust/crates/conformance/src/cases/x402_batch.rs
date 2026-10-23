@@ -456,6 +456,10 @@ fn policy_case(
 
 /// An `open` deposit: no stored record, no channel onchain yet.
 fn open_input(transaction: String) -> Value {
+    open_input_with(transaction, Atas::Healthy)
+}
+
+fn open_input_with(transaction: String, atas: Atas) -> Value {
     let config = cfg();
     let payload = json!({
         "type": "deposit",
@@ -468,7 +472,7 @@ fn open_input(transaction: String) -> Value {
         &requirements(),
         &payload,
         None,
-        fx::rpc_fixtures(None, Atas::Healthy, TOKEN_PROGRAM),
+        fx::rpc_fixtures(None, atas, TOKEN_PROGRAM),
     )
 }
 
@@ -1427,6 +1431,12 @@ crate::registry! {
         voucher_input(&with(cfg(), "receiver", json!(keys::X402_OTHER_PAY_TO)), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()),
         rej(RejectCode::ChannelState),
     ).requirements(&[RECEIVER_IS_PAY_TO]).build();
+    batch_verify_voucher_receiver_quotes_a_code_reject => voucher_case(
+        "batch-verify-voucher-receiver-quotes-a-code-reject", bindings_spec(), BugType::AuthBypass,
+        "channelConfig.receiver is the text invalid_batch_settlement_svm_cumulative_amount_mismatch rather than payTo. The failure is the receiver binding (channel-state), whatever code the client's own text names: a verifier that classifies its error by searching the message reports a cumulative mismatch, and answers it with the corrective 402 carrying the channel's latest voucher.",
+        voucher_input(&with(cfg(), "receiver", json!("invalid_batch_settlement_svm_cumulative_amount_mismatch")), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()),
+        rej(RejectCode::ChannelState),
+    ).requirements(&[RECEIVER_IS_PAY_TO]).build();
     batch_verify_voucher_token_not_asset_reject => voucher_case(
         "batch-verify-voucher-token-not-asset-reject", bindings_spec(), BugType::AuthBypass,
         "channelConfig.token is another mint than the asset (voucher signed for that config's PDA).",
@@ -1509,9 +1519,21 @@ crate::registry! {
     );
     batch_verify_top_up_compute_budget_prefix => policy_case(
         "batch-verify-top-up-compute-budget-prefix", policy_spec("If both are present, the limit MUST precede the price."), &[LAYOUT, LIMIT_BEFORE_PRICE, CB_LIMIT, CB_PRICE],
-        "Paired accept: SetComputeUnitLimit 400000 then SetComputeUnitPrice 5000000 (both at the cap) before the top_up.",
-        top_up_tx(vec![fx::compute_ix(&fx::unit_limit(400_000)), fx::compute_ix(&fx::unit_price(5_000_000))], TOP_UP_AMOUNT_ADDED, memo()),
+        "Paired accept: SetComputeUnitLimit 400000 (at the cap) then SetComputeUnitPrice 5000 before the top_up, a 2000 lamport priority fee: exactly the sponsor's cap on the fee it pays (RULINGS S6).",
+        top_up_tx(vec![fx::compute_ix(&fx::unit_limit(400_000)), fx::compute_ix(&fx::unit_price(5_000))], TOP_UP_AMOUNT_ADDED, memo()),
         Expect::Accept(Pin::Outcome),
+    );
+    batch_verify_top_up_priority_fee_over_cap_reject => policy_case(
+        "batch-verify-top-up-priority-fee-over-cap-reject", policy_spec("A sponsor MAY apply stricter local compute-unit, priority-fee, or required-signature caps, but MUST NOT relax the absolute maxima above."), &[CB_LIMIT, CB_PRICE],
+        "SetComputeUnitLimit 400000 and SetComputeUnitPrice 5000000, each at its own cap: the sponsor would pay a 2000000 lamport priority fee, so it bounds the fee as limit times price (RULINGS S6). Pair: batch-verify-top-up-compute-budget-prefix.",
+        top_up_tx(vec![fx::compute_ix(&fx::unit_limit(400_000)), fx::compute_ix(&fx::unit_price(5_000_000))], TOP_UP_AMOUNT_ADDED, memo()),
+        rej(RejectCode::SetupTransaction),
+    );
+    batch_verify_top_up_implicit_limit_priority_fee_over_cap_reject => policy_case(
+        "batch-verify-top-up-implicit-limit-priority-fee-over-cap-reject", policy_spec("A sponsor MAY apply stricter local compute-unit, priority-fee, or required-signature caps, but MUST NOT relax the absolute maxima above."), &[CB_PRICE],
+        "SetComputeUnitPrice 5001 with no SetComputeUnitLimit: the runtime budgets 200000 units for each of the top_up and the memo, so the sponsor would pay 2001 lamports, one over its cap (RULINGS S6). A verifier that bounds only declared limits accepts it.",
+        top_up_tx(vec![fx::compute_ix(&fx::unit_price(5_001))], TOP_UP_AMOUNT_ADDED, memo()),
+        rej(RejectCode::SetupTransaction),
     );
     batch_verify_top_up_three_lighthouse => policy_case(
         "batch-verify-top-up-three-lighthouse", policy_spec("and at most three Lighthouse instructions"), &[LAYOUT, ALLOWLIST],
@@ -1679,6 +1701,13 @@ crate::registry! {
         top_up_input_with(&route(), top_up_tx(vec![], TOP_UP_AMOUNT_ADDED, memo()), "6000", 4_000, Atas::FrozenPayer, TOKEN_PROGRAM),
         rej(RejectCode::SettlementSimulation),
     ).requirements(&[SETTLEMENT_ACCOUNTS, "X402-fbdea947ae"]).authored(None).build();
+    batch_verify_top_up_unfunded_payer_reject => case(
+        "batch-verify-top-up-unfunded-payer-reject", "batch-verify-setup-policy.json", Mode::VerifyTransaction, Role::Server, BugType::Settlement,
+        s("Canonical top_up", "It MUST confirm the payer has sufficient tokens."),
+        "The accept top-up, but the payer's token account holds 1 base unit against the 6000 top-up. The deposit is broadcast only after the handler runs, so a verifier that skips the balance serves the request and only then finds the deposit cannot land.",
+        top_up_input_with(&route(), top_up_tx(vec![], TOP_UP_AMOUNT_ADDED, memo()), "6000", 4_000, Atas::UnfundedPayer, TOKEN_PROGRAM),
+        rej(RejectCode::SettlementSimulation),
+    ).requirements(&["X402-014270dc81"]).build();
 
     // ── server verify: open ──
     batch_verify_open_accept => open_case(
@@ -1687,6 +1716,13 @@ crate::registry! {
         open_tx(honest_open(), open_suffix()),
         Expect::AcceptAuthored(json!({})),
     ).authored(None).build();
+    batch_verify_open_unfunded_payer_reject => case(
+        "batch-verify-open-unfunded-payer-reject", "batch-verify-open.json", Mode::VerifyTransaction, Role::Server, BugType::Settlement,
+        s("Canonical open", "It MUST confirm the payer has sufficient tokens for the deposit and the sponsor has sufficient SOL for the transaction fee plus the channel PDA and escrow ATA rent."),
+        "The accept open, but the payer's token account holds 1 base unit against the 10000 deposit. The deposit is broadcast only after the handler runs, so a verifier that skips the balance serves the request and only then finds the open cannot land. Pair: batch-verify-open-accept.",
+        open_input_with(open_tx(honest_open(), open_suffix()), Atas::UnfundedPayer),
+        rej(RejectCode::SettlementSimulation),
+    ).requirements(&["X402-0ff4cabcb4"]).build();
     batch_verify_open_missing_binding_memo_reject => open_case(
         "batch-verify-open-missing-binding-memo-reject", s("Top-level instruction layout", "An `open` suffix also carries exactly one binding Memo from section 3."), &[MEMO_EXACT, BINDING_KEY],
         "The open carries only the seller memo: without the binding memo the channel is bound to no receiver authorizer.",
@@ -1886,15 +1922,21 @@ crate::registry! {
     ).build();
     batch_txv1_top_up_v1_priority_fee_over_cap_reject => txv1_case(
         "batch-txv1-top-up-v1-priority-fee-over-cap-reject", t("Top-level instruction layout", "`priorityFee * 1000000 <= 5000000 * computeUnitLimit`"), &[TX_V1_CAPS],
-        "priorityFee 1000001 lamports at computeUnitLimit 200000: 1000001 × 10^6 > 5000000 × 200000 (one lamport over the cap).",
-        v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_priority_fee(1_000_001), vec![])),
+        "priorityFee 1501 lamports at computeUnitLimit 300: 1501 × 10^6 > 5000000 × 300 (one lamport over the cap), and still under the sponsor's 2000 lamport cap on the total fee, so only the per-unit rule rejects it.",
+        v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_compute_unit_limit(300).with_priority_fee(1_501), vec![])),
         rej(RejectCode::SetupTransaction),
     ).build();
     batch_txv1_top_up_v1_priority_fee_at_cap => txv1_case(
         "batch-txv1-top-up-v1-priority-fee-at-cap", t("Top-level instruction layout", "`priorityFee * 1000000 <= 5000000 * computeUnitLimit`"), &[TX_V1_CAPS],
-        "Paired accept: priorityFee 1000000 lamports at computeUnitLimit 200000 is exactly the cap.",
-        v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_priority_fee(1_000_000), vec![])),
+        "Paired accept: priorityFee 1500 lamports at computeUnitLimit 300 is exactly the per-unit cap, and under the sponsor's 2000 lamport cap on the total fee (RULINGS S6).",
+        v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_compute_unit_limit(300).with_priority_fee(1_500), vec![])),
         Expect::Accept(Pin::Outcome),
+    ).build();
+    batch_txv1_top_up_v1_priority_fee_over_sponsor_cap_reject => txv1_case(
+        "batch-txv1-top-up-v1-priority-fee-over-sponsor-cap-reject", t("Top-level instruction layout", "`priorityFee * 1000000 <= 5000000 * computeUnitLimit`"), &[TX_V1_CAPS],
+        "priorityFee 2001 lamports at computeUnitLimit 200000: far under the per-unit cap, but one lamport over the cap the sponsor puts on the total fee it pays (RULINGS S6).",
+        v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_priority_fee(2_001), vec![])),
+        rej(RejectCode::SetupTransaction),
     ).build();
     batch_txv1_top_up_v0_over_1232_bytes_reject => txv1_case(
         "batch-txv1-top-up-v0-over-1232-bytes-reject", tx_versions_spec("A legacy or version-0 transaction MUST NOT exceed 1232 serialized bytes; a version-1 transaction MUST NOT exceed 4096 serialized bytes."), &[TX_SIZE],
