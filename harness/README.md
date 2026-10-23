@@ -261,7 +261,7 @@ regenerated with `pnpm coverage` and CI fails when it is stale.
 | vector session | 191 | 8 · 183u | 3 · 188u | — | — | 36 · 148u · 7k | — | 191 | 3 · 188u | 36 · 148u · 7k |
 | vector subscription | 123 | — | — | — | — | — | — | 123 | — | 70 · 15u · 38k |
 | vector x402-batch-settlement | 165 | — | — | — | — | — | — | 165 | — | 66 · 27u · 72k |
-| vector x402-exact | 73 | 47 · 26k | — | 32 · 19u · 22k | 32 · 21u · 20k | 44 · 2u · 27k | 29 · 19u · 25k | 73 | 14 · 52u · 7k | 35 · 29u · 9k |
+| vector x402-exact | 73 | 47 · 26k | — | 32 · 19u · 22k | 32 · 21u · 20k | 45 · 2u · 26k | 29 · 19u · 25k | 73 | 14 · 52u · 7k | 35 · 29u · 9k |
 | vector x402-upto | 124 | — | — | — | — | — | — | 124 | — | 104 · 2u · 18k |
 
 Each cell counts the cases that must pass, then `u` unsupported (declared, executed, must report unsupported) and `k` known failing (declared with tracking, executed, must fail). `—` means the SDK does not claim the suite. Source: `harness/expectations/<language>.toml`.
@@ -635,8 +635,8 @@ come from the same extraction as `pkc req-lint`.
 | `X402-6708749c55`* | scheme_exact_svm.md § 2.1.1 Fee Payer Isolation (MUST) | 2 | 2 | — | 1 · 1k | 1 · 1k | 1 · 1k | 2 | 2 | 0 · 2u | 2 |
 | `X402-ed41478ffe`* | scheme_exact_svm.md § 2.1.1 Fee Payer Isolation (MUST) | 1 | 1 | — | 1 | 1 | 1 | 1 | 1 | 0 · 1u | 1 |
 | `X402-985ecc1ea3`* | scheme_exact_svm.md § 2.1.3 Fee Payer Fund Safety (MUST) | 1 | 1 | — | 0 · 1k | 0 · 1k | 0 · 1k | 1 | 1 | 0 · 1u | 1 |
-| `X402-27bff260c3`* | scheme_exact_svm.md § 2.1.4 Signer Set Integrity (MUST) | 1 | 0 · 1k | — | 0 · 1k | 0 · 1k | 0 · 1k | 0 · 1k | 1 | 0 · 1u | 0 · 1k |
-| `X402-9b240d95a0`* | scheme_exact_svm.md § 2.1.4 Signer Set Integrity (MUST) | 1 | 0 · 1k | — | 0 · 1k | 0 · 1k | 0 · 1k | 0 · 1k | 1 | 0 · 1u | 0 · 1k |
+| `X402-27bff260c3`* | scheme_exact_svm.md § 2.1.4 Signer Set Integrity (MUST) | 1 | 0 · 1k | — | 0 · 1k | 0 · 1k | 1 | 0 · 1k | 1 | 0 · 1u | 0 · 1k |
+| `X402-9b240d95a0`* | scheme_exact_svm.md § 2.1.4 Signer Set Integrity (MUST) | 1 | 0 · 1k | — | 0 · 1k | 0 · 1k | 1 | 0 · 1k | 1 | 0 · 1u | 0 · 1k |
 | `X402-6b3e9350c8`* | scheme_exact_svm.md § 3.1 Path 1 — Static Layout Verification (standard wallets) | 7 | 5 | — | 0 · 5u | 0 · 5u | 5 | 0 · 5u | 7 | 5 | 5 · 2u |
 | `X402-a1cf65b0f0`* | scheme_exact_svm.md § 3.1 Path 1 — Static Layout Verification (standard wallets) | 1 | 1 | — | 1 | 1 | 1 | 1 | 1 | 0 · 1u | 1 |
 | `X402-a8bd75d71b`* | scheme_exact_svm.md § 3.1 Path 1 — Static Layout Verification (standard wallets) | 4 | 4 | — | 4 | 4 | 4 | 4 | 4 | 0 · 4u | 4 |
