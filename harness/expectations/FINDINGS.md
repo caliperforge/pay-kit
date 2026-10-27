@@ -12,7 +12,7 @@ Paths are file:line at the commit that recorded them.
 ## x402-extra-required-signer-accepted
 
 **Case:** `vector/x402-exact-verify-extra-required-signer-reject`
-**SDKs:** go, lua, php, python, ruby, typescript
+**SDKs:** go, lua, php, ruby, typescript
 
 scheme_exact_svm.md §2.1.4: “The transaction MUST NOT require any signatures
 beyond the client and the sponsor (feePayer).” The vector adds a third key as
@@ -23,7 +23,6 @@ x402 verifier accepts, because none compares the header's required signers
 with {fee payer, transfer authority}:
 
 - Go `go/protocols/x402/verify.go:81` (`VerifyExactTransaction`)
-- Python `python/src/solana_pay_kit/protocols/x402/exact/verify.py:83`
 - Ruby `ruby/lib/pay_kit/protocols/x402/protocol/schemes/exact/verify.rb:33`;
   `verify_client_signatures!` (`:68`) only checks that each extra signer signed
 - PHP `php/src/Protocols/X402/Exact/Verifier.php:61`
