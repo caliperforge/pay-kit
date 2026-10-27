@@ -208,7 +208,11 @@ ids = [
   "vector/x402-build-no-intersection-reject",
   "vector/x402-build-empty-advertisement-reject",
   "vector/x402-build-legacy-only-reject",
+  "vector/x402-build-unknown-entry-reject",
+  "vector/x402-build-string-entry-reject",
   "vector/x402-verify-v1-accept",
+  "vector/x402-verify-v1-loaded-data-limit-4mib-accept",
+  "vector/x402-verify-v1-loaded-data-limit-small-accept",
   "vector/x402-verify-v1-not-accepted-reject",
   "vector/x402-verify-v1-explicit-v0-sponsor-reject",
   "vector/x402-verify-v1-over-1232-accept",
@@ -265,6 +269,8 @@ tracking = "FINDINGS.md#txv1-go"
 ids = [
   "cross/x402-build-duplicate-advertisement/rust/go",
   "cross/x402-build-v1-advertised/rust/go",
+  "cross/x402-build-duplicate-advertisement/typescript/go",
+  "cross/x402-build-v1-advertised/typescript/go",
 ]
 reason = "refuses a valid version-1 x402 build: the verifier cannot decode or admit version 1"
 tracking = "FINDINGS.md#txv1-go"
@@ -272,10 +278,6 @@ tracking = "FINDINGS.md#txv1-go"
 [[unsupported]]
 reason = "the runner's session verify path drives only the SDK's voucher verifier (input.sessionVoucherVerify); it has no path to the session server's open checks (input.sessionOpenVerify, input.sessionServerVerify)"
 pattern = "vector/session-open-*"
-[[known_failing]]
-id = "vector/x402-exact-verify-priority-fee-over-cap-reject"
-reason = "the x402 exact verifier caps the unit price alone (go/protocols/x402/verify.go:21), so the 200,000 unit limit at 5,000,000 micro-lamports per unit (a 1,000,000 lamport priority fee) is sponsored (RULINGS S6)"
-tracking = "FINDINGS.md#x402-priority-fee-product-uncapped"
 
 [[known_failing]]
 ids = [

@@ -1,4 +1,5 @@
 import type { ExactSvmSchemeOptions } from '@x402/svm';
+import type { UptoSvmFacilitatorConfig } from '@x402/svm/upto/facilitator';
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import type { X402Options } from '../config.js';
@@ -6,10 +7,13 @@ import type { X402Options } from '../config.js';
 // Compile-time drift guard: X402Options must equal the full vendored
 // @x402/svm option surface modulo readonly (our config is frozen). Key drift
 // in either direction — including upstream adding an option we don't expose —
-// optionality drift, and per-key widening/narrowing all fail typecheck.
+// optionality drift, and per-key widening/narrowing all fail typecheck. The
+// upto facilitator's treasury owner is the one upto-only option on top.
 type ImmutableValue<V> = V extends readonly (infer E)[] ? readonly E[] : V;
 type Immutable<T> = { readonly [K in keyof T]: ImmutableValue<T[K]> };
-expectTypeOf<Immutable<ExactSvmSchemeOptions>>().toEqualTypeOf<X402Options>();
+expectTypeOf<
+    Immutable<ExactSvmSchemeOptions & Pick<UptoSvmFacilitatorConfig, 'paymentChannelsTreasuryOwner'>>
+>().toEqualTypeOf<X402Options>();
 
 // The upto challenge requires a server-fetched recentBlockhash + recentSlot
 // (one getLatestBlockhash call); stub the RPC so the enriched requirement is
@@ -133,6 +137,8 @@ describe('x402 exact adapter', () => {
         expect(typeof entry.network).toBe('string');
         expect(typeof entry.asset).toBe('string');
         expect((entry.extra as { feePayer?: string }).feePayer).toBe(config.operator.signer.pubkey);
+        // Copied from the facilitator's /supported extra (scheme_exact_svm.md §1.5).
+        expect((entry.extra as { transactionVersions?: unknown }).transactionVersions).toEqual([0, 1]);
     });
 
     it('detects the x402 payment header', async () => {
@@ -404,6 +410,18 @@ describe('x402 smart-wallet options', () => {
         expect(uptoCtorCalls.at(-1)?.[1]).toEqual({});
     });
 
+    it('forwards a configured treasury owner to the upto facilitator only when set', async () => {
+        const owner = 'Cs2zdfUNonRdRGsiZUQQLdTxzxVvJZmgiX2mpLYKuEqP';
+        const config = await configure({
+            mpp: { challengeBindingSecret: 'x402-test-secret' },
+            network: 'solana_devnet',
+            x402: { paymentChannelsTreasuryOwner: owner },
+        });
+        uptoCtorCalls.length = 0;
+        new X402Upto(config);
+        expect(uptoCtorCalls.at(-1)?.[1]).toEqual({ paymentChannelsTreasuryOwner: owner });
+    });
+
     it('copies the allowlist so callers cannot mutate verification policy', async () => {
         const allowed = ['SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf'];
         const config = await configure({
@@ -429,6 +447,7 @@ describe('x402 upto engine', () => {
         expect((entry.extra as { feePayer?: string }).feePayer).toBe(config.operator.signer.pubkey);
         expect((entry.extra as { receiverAuthorizer?: string }).receiverAuthorizer).toBe(config.operator.signer.pubkey);
         expect((entry.extra as { withdrawDelay?: number }).withdrawDelay).toBe(900);
+        expect((entry.extra as { transactionVersions?: unknown }).transactionVersions).toEqual([0, 1]);
         expect((entry.extra as { tokenProgram?: string }).tokenProgram).toEqual(expect.any(String));
         expect((entry.extra as { assetTransferMethod?: string }).assetTransferMethod).toBeUndefined();
         expect((entry.extra as { facilitatorAddress?: string }).facilitatorAddress).toBeUndefined();

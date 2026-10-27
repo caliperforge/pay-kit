@@ -77,7 +77,9 @@ const NO_GRANT: &str = "X402-f882f2074a";
 const OPT_IN: &str = "X402-84916fe051";
 const TOKEN_PROGRAM_OWNER: &str = "X402-23747f44c3";
 const TOKEN_PROGRAM_VERIFY: &str = "X402-1230bb35a3";
-const CLAIMS_ONE_TO_FOUR: &str = "X402-7f4ee54a73";
+const CLAIMS_CAPACITY: &str = "X402-76654742e7";
+const SETTLE_CAPACITY: &str = "X402-c2ca42b7a4";
+const SERVER_COPIES_CAPACITY: &str = "X402-8f57677e36";
 const SEAL_CLOSE_AUTH: &str = "X402-45c411d301";
 const COMMITMENT_ID: &str = "X402-5ebca343d1";
 const STATIC_VALIDATE: &str = "X402-4ea8d1b0d9";
@@ -111,9 +113,9 @@ const TX_FACILITATOR_REJECTS: &str = "X402TX-5267172b18";
 const TX_CLIENT_INTERSECT: &str = "X402TX-61c735c7a9";
 const TX_CLIENT_EMPTY: &str = "X402TX-2909c4b4ec";
 const TX_SIZE: &str = "X402TX-dc7b0f3305";
-const TX_V1_BUDGET: &str = "X402TX-644919eb3b";
-const TX_V1_CAPS: &str = "X402TX-0f874a9c63";
-const TX_V1_NO_CB: &str = "X402TX-936b492daa";
+const TX_V1_BUDGET: &str = "X402TX-f9bcc1a14a";
+const TX_V1_CAPS: &str = "X402TX-703c03cfb5";
+const TX_V1_NO_CB: &str = "X402TX-915632f040";
 const TX_SERVER_COPIES: &str = "X402TX-f39a33ff74";
 
 // ── spec references ──
@@ -156,8 +158,12 @@ fn variants_spec() -> SpecRef {
 fn refund_voucher_spec() -> SpecRef {
     s("4.3 Client PaymentPayload Variants", "| `voucher` | `BatchVoucher` | REQUIRED in client mode. The server's accepted cumulative amount (`expiresAt` MUST be `0`).")
 }
+fn settle_spec() -> SpecRef {
+    s("4.5 Facilitator Interface", "`channels[]` MUST contain at least one entry and at most `extra.maxSettleChannels` entries, or four when the facilitator advertises no `maxSettleChannels`.")
+}
+
 fn claims_spec() -> SpecRef {
-    s("4.5 Facilitator Interface", "`claims[]` MUST contain between one and four entries so the instruction pairs fit in a legacy Solana transaction without address lookup tables.")
+    s("4.5 Facilitator Interface", "`claims[]` MUST contain at least one entry and at most `extra.maxClaimChannels` entries, or four when the facilitator advertises no `maxClaimChannels`, so the instruction pairs fit in one transaction without address lookup tables.")
 }
 fn wire_spec() -> SpecRef {
     s(
@@ -312,6 +318,15 @@ fn verify_input(
     if let Some(record) = record {
         input["batchServerChannel"] = record;
     }
+    input
+}
+
+/// Mark a verify vector whose verdict rests on the resource server's own
+/// record alone (`batchServerChannel`: the charged or accepted cumulative,
+/// a close-pending mark), which a stateless facilitator never sees
+/// (RULINGS B1): `batchVerdictFromStore: true`.
+fn from_store(mut input: Value) -> Value {
+    input["batchVerdictFromStore"] = json!(true);
     input
 }
 
@@ -847,6 +862,17 @@ fn v1_route() -> Route {
     }
 }
 
+/// A facilitator configured to accept version 0 only, stated explicitly:
+/// the scheme gives its own accepted set no default (“The facilitator
+/// enforces its own accepted set; it does not read
+/// `PaymentRequirements.extra.transactionVersions`.”).
+fn v0_only_route() -> Route {
+    Route {
+        tx_versions: Some(vec![0]),
+        ..Route::default()
+    }
+}
+
 fn v1_top_up(config: solana_message::v1::TransactionConfig, prefix: Vec<Instruction>) -> String {
     let mut ixs = prefix;
     ixs.push(fx::top_up_ix(&cfg(), TOP_UP_AMOUNT_ADDED));
@@ -1088,35 +1114,53 @@ crate::registry! {
         rej(RejectCode::InvalidPayload),
     ).build();
     batch_wire_redemption_claim_frozen => wire_case(
-        "batch-wire-redemption-claim-frozen", claims_spec(), &[CLAIMS_ONE_TO_FOUR],
+        "batch-wire-redemption-claim-frozen", claims_spec(), &[CLAIMS_CAPACITY],
         "claim payload with two entries, each channelId + full channelConfig + the latest BatchVoucher.",
         wire("redemption", json!({ "type": "claim", "claims": [claim_entry(&cfg(), 5_000), claim_entry(&with(with(cfg(), "salt", json!("43")), "openSlot", json!(341_000_050)), 7_000)] })),
         json_pin(),
     ).build();
     batch_wire_redemption_claim_empty_reject => wire_case(
-        "batch-wire-redemption-claim-empty-reject", claims_spec(), &[CLAIMS_ONE_TO_FOUR],
+        "batch-wire-redemption-claim-empty-reject", claims_spec(), &[CLAIMS_CAPACITY],
         "claims: [] is below the one-entry minimum.",
         wire("redemption", json!({ "type": "claim", "claims": [] })),
         rej(RejectCode::InvalidPayload),
     ).authored(None).build();
-    batch_wire_redemption_claim_five_entries_reject => wire_case(
-        "batch-wire-redemption-claim-five-entries-reject", claims_spec(), &[CLAIMS_ONE_TO_FOUR],
-        "Five claims exceed the four entries one legacy transaction can carry.",
-        wire("redemption", json!({ "type": "claim", "claims": (0..5).map(|i| claim_entry(&with(cfg(), "salt", json!((100 + i).to_string())), 1_000)).collect::<Vec<_>>() })),
+    batch_wire_redemption_claim_eighteen_entries => wire_case(
+        "batch-wire-redemption-claim-eighteen-entries", claims_spec(), &[CLAIMS_CAPACITY],
+        "Eighteen claims, the version-1 capacity (extra.maxClaimChannels 18): the payload parses. More than four is no longer a wire error; a facilitator that builds version 0 rejects it against its own capacity.",
+        wire("redemption", json!({ "type": "claim", "claims": (0..18).map(|i| claim_entry(&with(cfg(), "salt", json!((100 + i).to_string())), 1_000)).collect::<Vec<_>>() })),
+        json_pin(),
+    ).build();
+    batch_wire_redemption_claim_nineteen_entries_reject => wire_case(
+        "batch-wire-redemption-claim-nineteen-entries-reject", claims_spec(), &[CLAIMS_CAPACITY],
+        "Nineteen claims exceed what fits one version-1 transaction, so no facilitator can advertise that capacity: the payload is malformed for every facilitator.",
+        wire("redemption", json!({ "type": "claim", "claims": (0..19).map(|i| claim_entry(&with(cfg(), "salt", json!((100 + i).to_string())), 1_000)).collect::<Vec<_>>() })),
         rej(RejectCode::InvalidPayload),
     ).authored(None).build();
     batch_wire_redemption_claim_entry_without_config_reject => wire_case(
-        "batch-wire-redemption-claim-entry-without-config-reject", s("4.5 Facilitator Interface", "| Claim | `claims[].channelConfig` | `ChannelConfig` | Full channel configuration. |"), &[CLAIMS_ONE_TO_FOUR],
+        "batch-wire-redemption-claim-entry-without-config-reject", s("4.5 Facilitator Interface", "| Claim | `claims[].channelConfig` | `ChannelConfig` | Full channel configuration. |"), &[CLAIMS_CAPACITY],
         "A claim entry without its channelConfig cannot be derived or validated.",
         wire("redemption", json!({ "type": "claim", "claims": [without(claim_entry(&cfg(), 5_000), "channelConfig")] })),
         rej(RejectCode::InvalidPayload),
     ).build();
     batch_wire_redemption_settle_frozen => wire_case(
-        "batch-wire-redemption-settle-frozen", s("4.5 Facilitator Interface", "`channels[]` MUST contain between one and four entries, the same transaction-size bound as `claims[]`."), &[CLAIMS_ONE_TO_FOUR],
+        "batch-wire-redemption-settle-frozen", settle_spec(), &[SETTLE_CAPACITY],
         "settle payload: channels[] of {channelId, channelConfig}.",
         wire("redemption", json!({ "type": "settle", "channels": [{ "channelId": channel(&cfg()), "channelConfig": cfg() }] })),
         json_pin(),
     ).build();
+    batch_wire_redemption_settle_thirteen_channels => wire_case(
+        "batch-wire-redemption-settle-thirteen-channels", settle_spec(), &[SETTLE_CAPACITY],
+        "Thirteen settle channels, the version-1 capacity (extra.maxSettleChannels 13): the payload parses.",
+        wire("redemption", json!({ "type": "settle", "channels": (0..13).map(|i| { let c = with(cfg(), "salt", json!((200 + i).to_string())); json!({ "channelId": channel(&c), "channelConfig": c }) }).collect::<Vec<_>>() })),
+        json_pin(),
+    ).build();
+    batch_wire_redemption_settle_fourteen_channels_reject => wire_case(
+        "batch-wire-redemption-settle-fourteen-channels-reject", settle_spec(), &[SETTLE_CAPACITY],
+        "Fourteen settle channels exceed the largest capacity a facilitator may advertise (13): the payload is malformed for every facilitator.",
+        wire("redemption", json!({ "type": "settle", "channels": (0..14).map(|i| { let c = with(cfg(), "salt", json!((200 + i).to_string())); json!({ "channelId": channel(&c), "channelConfig": c }) }).collect::<Vec<_>>() })),
+        rej(RejectCode::InvalidPayload),
+    ).authored(None).build();
     batch_wire_redemption_seal_frozen => wire_case(
         "batch-wire-redemption-seal-frozen", s("4.5 Facilitator Interface", "| Seal | `closeAuthorization` | `CloseAuthorization` | REQUIRED (section 3)."), &[SEAL_CLOSE_AUTH],
         "seal payload: the tag beside channelId, channelConfig, the latest voucher and closeAuthorization {validBefore, signature}.",
@@ -1141,8 +1185,14 @@ crate::registry! {
         wire("requirements", v1_route().requirements()),
         json_pin(),
     ).build();
+    batch_wire_requirements_redemption_capacity => wire_case(
+        "batch-wire-requirements-redemption-capacity", s("GET /supported", "The server MUST copy `feePayer`, `transactionVersions`, `maxClaimChannels`, `maxSettleChannels`, and `maxIdleSecs` into `PaymentRequirements.extra`"), &[SERVER_COPIES_CAPACITY],
+        "Requirements of a route whose facilitator builds redemptions as version 1 carry its capacity, extra.maxClaimChannels 18 and extra.maxSettleChannels 13, copied from /supported; the SDK's requirements type keeps both.",
+        wire("requirements", requirements_with(&[("transactionVersions", json!([0, 1])), ("maxClaimChannels", json!(18)), ("maxSettleChannels", json!(13))])),
+        json_pin(),
+    ).build();
     batch_wire_requirements_unknown_transaction_version_reject => wire_case(
-        "batch-wire-requirements-unknown-transaction-version-reject", tx_versions_spec("Entries are the integers `0` and `1`, the Wallet Standard `supportedTransactionVersions` vocabulary."), &[TX_SERVER_COPIES],
+        "batch-wire-requirements-unknown-transaction-version-reject", tx_versions_spec("Entries MUST be the JSON integers `0` and `1` only."), &[TX_SERVER_COPIES],
         "extra.transactionVersions [0, 2]: 2 is not a transaction message version.",
         wire("requirements", requirements_with(&[("transactionVersions", json!([0, 2]))])),
         rej(RejectCode::InvalidPayload),
@@ -1320,19 +1370,19 @@ crate::registry! {
     batch_verify_voucher_one_below_reject => voucher_case(
         "batch-verify-voucher-one-below-reject", cumulative_spec(), BugType::Settlement,
         "Charged 3000, amount 1000: a voucher at 3999 underpays by one unit.",
-        voucher_input(&cfg(), honest_voucher(3_999), 3_000, 10_000, ChannelAccount::default()),
+        from_store(voucher_input(&cfg(), honest_voucher(3_999), 3_000, 10_000, ChannelAccount::default())),
         rej(RejectCode::CumulativeAmountMismatch),
     ).requirements(&[EVERY_PAID_REQUEST]).build();
     batch_verify_voucher_one_above_reject => voucher_case(
         "batch-verify-voucher-one-above-reject", cumulative_spec(), BugType::Settlement,
         "A voucher at 4001: in client mode each fresh voucher advances the cumulative by exactly the amount, not at least it (a stateless facilitator floor would accept it; the server rule is equality, RULINGS B1).",
-        voucher_input(&cfg(), honest_voucher(4_001), 3_000, 10_000, ChannelAccount::default()),
+        from_store(voucher_input(&cfg(), honest_voucher(4_001), 3_000, 10_000, ChannelAccount::default())),
         rej(RejectCode::CumulativeAmountMismatch),
     ).requirements(&[EVERY_PAID_REQUEST]).build();
     batch_verify_voucher_stale_reject => voucher_case(
         "batch-verify-voucher-stale-reject", cumulative_spec(), BugType::Replay,
         "A voucher at the already-charged 3000 (no stored voucher with that signature): stale, not a fresh authorization.",
-        voucher_input(&cfg(), honest_voucher(3_000), 3_000, 10_000, ChannelAccount::default()),
+        from_store(voucher_input(&cfg(), honest_voucher(3_000), 3_000, 10_000, ChannelAccount::default())),
         rej(RejectCode::CumulativeAmountMismatch),
     ).requirements(&[EVERY_PAID_REQUEST]).build();
     batch_verify_voucher_at_deposit => voucher_case(
@@ -1386,7 +1436,7 @@ crate::registry! {
     batch_verify_voucher_close_pending_in_store_reject => voucher_case(
         "batch-verify-voucher-close-pending-in-store-reject", s("4.5 Facilitator Interface", "For this unilateral path, the server MUST mark the channel close-pending and reject further paid requests."), BugType::Settlement,
         "The server already marked the channel close-pending (a sponsored request_close confirmed): further paid requests are refused.",
-        { let mut i = voucher_input(&cfg(), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()); i["batchServerChannel"]["closeRequestedAt"] = json!(1_785_000_000_u64); i },
+        { let mut i = voucher_input(&cfg(), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()); i["batchServerChannel"]["closeRequestedAt"] = json!(1_785_000_000_u64); from_store(i) },
         rej(RejectCode::ChannelClosing),
     ).requirements(&[CLOSE_PENDING, CLOSING]).build();
     batch_verify_voucher_onchain_closed_account_reject => voucher_case(
@@ -1460,13 +1510,23 @@ crate::registry! {
         "channelConfig omits receiverAuthorizer while the requirements advertise one: both MUST be present and equal.",
         voucher_input(&without(cfg(), "receiverAuthorizer"), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()),
         rej(RejectCode::ReceiverAuthorizerMismatch),
-    ).requirements(&[RA_EQUAL, RA_BOTH_PRESENT]).build();
+    )
+    .also_conformant(
+        &[crate::case::Alternative::Reject(RejectCode::PayloadType)],
+        "channelConfig.receiverAuthorizer is a required field of the wire object (“| `receiverAuthorizer` | string | Required.”), so a verifier that validates the payload shape before comparing it with extra.receiverAuthorizer refuses it as invalid_batch_settlement_svm_payload_type; the spec does not order the two checks.",
+    )
+    .requirements(&[RA_EQUAL, RA_BOTH_PRESENT]).build();
     batch_verify_voucher_server_mode_config_reject => voucher_case(
         "batch-verify-voucher-server-mode-config-reject", s("4.2 Shared Wire Objects and Program Mapping", "Omitted or `\"client\"` selects client mode; `\"server\"` selects server mode and MUST equal `extra.voucherSigner`."), BugType::AuthBypass,
         "channelConfig.voucherSigner \"server\" on a client-mode route: the mode must equal extra.voucherSigner.",
         voucher_input(&with(cfg(), "voucherSigner", json!("server")), honest_voucher(4_000), 3_000, 10_000, ChannelAccount::default()),
         rej(RejectCode::ChannelState),
-    ).requirements(&["X402-22712c36e1"]).build();
+    )
+    .also_conformant(
+        &[crate::case::Alternative::Reject(RejectCode::PayloadType)],
+        "no reason code names a voucherSigner that differs from extra.voucherSigner; a server-mode channelConfig on a client-mode route is a payload the route's operation does not take (invalid_batch_settlement_svm_payload_type, “payload `type` is not valid for the current verify or settle operation”) as plausibly as a channel-state mismatch.",
+    )
+    .requirements(&["X402-22712c36e1"]).build();
     batch_verify_accepted_amount_mismatch_reject => voucher_case(
         "batch-verify-accepted-amount-mismatch-reject", accepted_spec(), BugType::Precedence,
         "accepted.amount \"500\" while the route charges 1000 (voucher otherwise valid at 4000).",
@@ -1528,13 +1588,15 @@ crate::registry! {
         "SetComputeUnitLimit 400000 and SetComputeUnitPrice 5000000, each at its own cap: the sponsor would pay a 2000000 lamport priority fee, so it bounds the fee as limit times price (RULINGS S6). Pair: batch-verify-top-up-compute-budget-prefix.",
         top_up_tx(vec![fx::compute_ix(&fx::unit_limit(400_000)), fx::compute_ix(&fx::unit_price(5_000_000))], TOP_UP_AMOUNT_ADDED, memo()),
         rej(RejectCode::SetupTransaction),
-    );
+    )
+    .also_conformant(&[crate::case::Alternative::Accept], super::CHANNEL_FEE_PRODUCT_POLICY);
     batch_verify_top_up_implicit_limit_priority_fee_over_cap_reject => policy_case(
         "batch-verify-top-up-implicit-limit-priority-fee-over-cap-reject", policy_spec("A sponsor MAY apply stricter local compute-unit, priority-fee, or required-signature caps, but MUST NOT relax the absolute maxima above."), &[CB_PRICE],
         "SetComputeUnitPrice 5001 with no SetComputeUnitLimit: the runtime budgets 200000 units for each of the top_up and the memo, so the sponsor would pay 2001 lamports, one over its cap (RULINGS S6). A verifier that bounds only declared limits accepts it.",
         top_up_tx(vec![fx::compute_ix(&fx::unit_price(5_001))], TOP_UP_AMOUNT_ADDED, memo()),
         rej(RejectCode::SetupTransaction),
-    );
+    )
+    .also_conformant(&[crate::case::Alternative::Accept], super::CHANNEL_FEE_PRODUCT_POLICY);
     batch_verify_top_up_three_lighthouse => policy_case(
         "batch-verify-top-up-three-lighthouse", policy_spec("and at most three Lighthouse instructions"), &[LAYOUT, ALLOWLIST],
         "Paired accept: the memo followed by three Lighthouse assertions in the suffix.",
@@ -1542,7 +1604,7 @@ crate::registry! {
         Expect::Accept(Pin::Outcome),
     );
     batch_verify_top_up_legacy_message => policy_case(
-        "batch-verify-top-up-legacy-message", policy_spec("The message MAY be legacy or version `0`, but it MUST NOT contain Address Lookup Table lookups."), &[STATIC_VALIDATE],
+        "batch-verify-top-up-legacy-message", policy_spec("The message version MUST be one advertised in `extra.transactionVersions` (0 when the field is absent; see [Transaction versions](#transaction-versions)), and the message MUST NOT contain Address Lookup Table lookups."), &[STATIC_VALIDATE],
         "The canonical top_up compiled as a legacy (unversioned) message: accepted and policed like version 0.",
         fx::sponsored_legacy(vec![fx::top_up_ix(&cfg(), TOP_UP_AMOUNT_ADDED), fx::memo_ix(fx::MEMO)]),
         Expect::Accept(Pin::Outcome),
@@ -1627,7 +1689,7 @@ crate::registry! {
         rej(RejectCode::SetupTransaction),
     );
     batch_verify_top_up_duplicate_limit_reject => policy_case(
-        "batch-verify-top-up-duplicate-limit-reject", policy_spec("An optional Compute Budget prefix containing at most one `SetComputeUnitLimit` instruction"), &[LAYOUT],
+        "batch-verify-top-up-duplicate-limit-reject", policy_spec("In a legacy or version-0 transaction, an optional Compute Budget prefix containing at most one `SetComputeUnitLimit` instruction"), &[LAYOUT],
         "Two SetComputeUnitLimit instructions.",
         top_up_tx(vec![fx::compute_ix(&fx::unit_limit(200_000)), fx::compute_ix(&fx::unit_limit(200_000))], TOP_UP_AMOUNT_ADDED, memo()),
         rej(RejectCode::SetupTransaction),
@@ -1669,10 +1731,14 @@ crate::registry! {
         rej(RejectCode::SetupTransaction),
     );
     batch_verify_top_up_trailing_bytes_reject => policy_case(
-        "batch-verify-top-up-trailing-bytes-reject", s("Canonical open", "The facilitator MUST fully decode the instruction data, reject truncated data or trailing bytes"), &[FULL_DECODE],
-        "top_up data with one trailing byte (10 bytes instead of 9).",
+        "batch-verify-top-up-trailing-bytes-reject", top_up_spec(), &[TOP_UP_AMOUNT],
+        "top_up data with one trailing byte (10 bytes instead of 9). The Rust sponsor decodes the top_up as strictly as the open and refuses it; the spec states the trailing-bytes rule for the open only.",
         fx::sponsored(vec![{ let mut ix = fx::top_up_ix(&cfg(), TOP_UP_AMOUNT_ADDED); ix.data.push(0); ix }, fx::memo_ix(fx::MEMO)]),
         rej(RejectCode::SetupTransaction),
+    )
+    .also_conformant(
+        &[crate::case::Alternative::Accept],
+        "“The facilitator MUST fully decode the instruction data, reject truncated data or trailing bytes” is stated under Canonical open only; Canonical top_up requires that “The facilitator MUST confirm the decoded amount equals `payload.deposit.amount`”, which a decoder that ignores the extra byte also confirms.",
     );
     batch_verify_top_up_fee_payer_as_account_reject => policy_case(
         "batch-verify-top-up-fee-payer-as-account-reject", s("Canonical top_up", "In this form `extra.feePayer` authorizes only the bounded transaction fee and MUST NOT be an instruction account, authority, source, or delegate."), &[TOP_UP_FEE_PAYER, "X402-9ca40ae469"],
@@ -1799,7 +1865,7 @@ crate::registry! {
         "batch-verify-refund-voucher-not-accepted-cumulative-reject", "batch-verify-refund.json", Mode::VerifyTransaction, Role::Server, BugType::Settlement,
         s("4.5 Facilitator Interface", "In client mode it MUST reject a voucher whose `maxClaimableAmount` differs from its accepted cumulative amount."),
         "The refund's voucher is at 2000 while the server accepted 3000: a payer cannot close at an older watermark.",
-        refund_input_with(refund_payload(Some(honest_voucher(2_000)), Some(request_close(memo()))), ChannelAccount::default()),
+        from_store(refund_input_with(refund_payload(Some(honest_voucher(2_000)), Some(request_close(memo()))), ChannelAccount::default())),
         rej(RejectCode::CloseState),
     ).requirements(&[REFUND_CUMULATIVE]).authored(None).build();
     batch_verify_refund_with_amount_reject => case(
@@ -1873,15 +1939,15 @@ crate::registry! {
 
     // ── transaction versions (x402-txv1) ──
     batch_txv1_top_up_v1_advertised => txv1_case(
-        "batch-txv1-top-up-v1-advertised", tx_versions_spec("A version-1 transaction carries its compute budget in the message `TransactionConfig`."), &[TX_ADVERTISED, TX_DEPOSIT_VERSION, TX_V1_BUDGET],
+        "batch-txv1-top-up-v1-advertised", tx_versions_spec("A version-1 transaction carries its compute budget in the message's `TransactionConfigMask` and the config values that follow it"), &[TX_ADVERTISED, TX_DEPOSIT_VERSION, TX_V1_BUDGET],
         "The route advertises transactionVersions [0, 1]: a version-1 top_up with computeUnitLimit, loadedAccountsDataSizeLimit and a priorityFee within the cap in its header, no ComputeBudget instruction, is accepted.",
         v1_input(&v1_route(), v1_top_up(fx::v1_budget(), vec![])),
         Expect::Accept(Pin::Outcome),
     ).build();
     batch_txv1_top_up_v1_not_advertised_reject => txv1_case(
         "batch-txv1-top-up-v1-not-advertised-reject", tx_versions_spec("The facilitator MUST reject a message whose version is outside the set it accepts, before inspecting any instruction, with `unsupported_transaction_version`."), &[TX_FACILITATOR_REJECTS, TX_ADVERTISED],
-        "The same version-1 top_up on a route that accepts only version 0 (no transactionVersions advertised).",
-        v1_input(&route(), v1_top_up(fx::v1_budget(), vec![])),
+        "The same version-1 top_up to a facilitator configured to accept only version 0 (batchServer.transactionVersions [0]).",
+        v1_input(&v0_only_route(), v1_top_up(fx::v1_budget(), vec![])),
         rej(RejectCode::UnsupportedVersion),
     ).authored(None).build();
     batch_txv1_top_up_v0_on_v1_route => txv1_case(
@@ -1891,31 +1957,31 @@ crate::registry! {
         Expect::Accept(Pin::Outcome),
     ).build();
     batch_txv1_top_up_v1_compute_budget_instruction_reject => txv1_case(
-        "batch-txv1-top-up-v1-compute-budget-instruction-reject", t("Top-level instruction layout", "A version-1 transaction that contains a Compute Budget instruction MUST be rejected."), &[TX_V1_NO_CB],
+        "batch-txv1-top-up-v1-compute-budget-instruction-reject", t("Top-level instruction layout", "A version-1 transaction that contains a Compute Budget instruction MUST be rejected (an x402 sponsor rule; the runtime treats such instructions as no-ops)."), &[TX_V1_NO_CB],
         "A version-1 top_up that also carries a SetComputeUnitLimit instruction.",
         v1_input(&v1_route(), v1_top_up(fx::v1_budget(), vec![fx::compute_ix(&fx::unit_limit(200_000))])),
         rej(RejectCode::SetupTransaction),
     ).build();
     batch_txv1_top_up_v1_missing_unit_limit_reject => txv1_case(
-        "batch-txv1-top-up-v1-missing-unit-limit-reject", t("Top-level instruction layout", "`computeUnitLimit` MUST be present and MUST NOT exceed `400000`"), &[TX_V1_CAPS, TX_V1_BUDGET],
+        "batch-txv1-top-up-v1-missing-unit-limit-reject", t("Top-level instruction layout", "`computeUnitLimit` (bit 2) MUST be set and MUST NOT exceed `400000`"), &[TX_V1_CAPS, TX_V1_BUDGET],
         "A version-1 top_up whose header config omits computeUnitLimit (it would be budgeted zero).",
         v1_input(&v1_route(), v1_top_up(solana_message::v1::TransactionConfig::empty().with_loaded_accounts_data_size_limit(64 * 1024 * 1024), vec![])),
         rej(RejectCode::SetupTransaction),
     ).build();
     batch_txv1_top_up_v1_missing_loaded_limit_reject => txv1_case(
-        "batch-txv1-top-up-v1-missing-loaded-limit-reject", t("Top-level instruction layout", "`loadedAccountsDataSizeLimit` MUST be present"), &[TX_V1_CAPS, TX_V1_BUDGET],
+        "batch-txv1-top-up-v1-missing-loaded-limit-reject", t("Top-level instruction layout", "`loadedAccountsDataSizeLimit` (bit 3) MUST be set"), &[TX_V1_CAPS, TX_V1_BUDGET],
         "A version-1 top_up whose header config omits loadedAccountsDataSizeLimit.",
         v1_input(&v1_route(), v1_top_up(solana_message::v1::TransactionConfig::empty().with_compute_unit_limit(200_000), vec![])),
         rej(RejectCode::SetupTransaction),
     ).build();
     batch_txv1_top_up_v1_loaded_limit_below_max => txv1_case(
-        "batch-txv1-top-up-v1-loaded-limit-below-max", t("Top-level instruction layout", "`loadedAccountsDataSizeLimit` MUST be present"), &[TX_V1_CAPS, TX_V1_BUDGET],
+        "batch-txv1-top-up-v1-loaded-limit-below-max", t("Top-level instruction layout", "`loadedAccountsDataSizeLimit` (bit 3) MUST be set"), &[TX_V1_CAPS, TX_V1_BUDGET],
         "A version-1 top_up whose header sets loadedAccountsDataSizeLimit 32 MiB (present, below the runtime maximum): the spec requires the field, not a particular value, and a sponsor may only tighten caps it names.",
         v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_loaded_accounts_data_size_limit(32 * 1024 * 1024), vec![])),
         Expect::AcceptAuthored(json!({})),
     ).authored(None).build();
     batch_txv1_top_up_v1_unit_limit_over_cap_reject => txv1_case(
-        "batch-txv1-top-up-v1-unit-limit-over-cap-reject", t("Top-level instruction layout", "`computeUnitLimit` MUST be present and MUST NOT exceed `400000`"), &[TX_V1_CAPS],
+        "batch-txv1-top-up-v1-unit-limit-over-cap-reject", t("Top-level instruction layout", "`computeUnitLimit` (bit 2) MUST be set and MUST NOT exceed `400000`"), &[TX_V1_CAPS],
         "Header computeUnitLimit 400001.",
         v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_compute_unit_limit(400_001), vec![])),
         rej(RejectCode::SetupTransaction),
@@ -1937,7 +2003,9 @@ crate::registry! {
         "priorityFee 2001 lamports at computeUnitLimit 200000: far under the per-unit cap, but one lamport over the cap the sponsor puts on the total fee it pays (RULINGS S6).",
         v1_input(&v1_route(), v1_top_up(fx::v1_budget().with_priority_fee(2_001), vec![])),
         rej(RejectCode::SetupTransaction),
-    ).build();
+    )
+    .also_conformant(&[crate::case::Alternative::Accept], super::CHANNEL_FEE_PRODUCT_POLICY)
+    .build();
     batch_txv1_top_up_v0_over_1232_bytes_reject => txv1_case(
         "batch-txv1-top-up-v0-over-1232-bytes-reject", tx_versions_spec("A legacy or version-0 transaction MUST NOT exceed 1232 serialized bytes; a version-1 transaction MUST NOT exceed 4096 serialized bytes."), &[TX_SIZE],
         "A version-0 top_up whose three 330-byte Lighthouse assertions push it past 1232 serialized bytes.",
@@ -1958,8 +2026,12 @@ crate::registry! {
     ).build();
     batch_txv1_refund_v1_not_advertised_reject => txv1_case(
         "batch-txv1-refund-v1-not-advertised-reject", t("4.3 Client PaymentPayload Variants", "Its message version MUST be one advertised in `extra.transactionVersions`."), &[TX_REFUND_VERSION, TX_FACILITATOR_REJECTS],
-        "A client-mode refund whose request_close is version 1 on a route that accepts only version 0.",
-        refund_input_with(refund_payload(Some(honest_voucher(3_000)), Some(fx::sponsored_v1(vec![fx::request_close_ix(&cfg()), fx::memo_ix(fx::MEMO)], fx::v1_budget()))), ChannelAccount::default()),
+        "A client-mode refund whose request_close is version 1, to a facilitator configured to accept only version 0 (batchServer.transactionVersions [0]).",
+        {
+            let mut input = refund_input_with(refund_payload(Some(honest_voucher(3_000)), Some(fx::sponsored_v1(vec![fx::request_close_ix(&cfg()), fx::memo_ix(fx::MEMO)], fx::v1_budget()))), ChannelAccount::default());
+            input["batchServer"] = v0_only_route().server_json();
+            input
+        },
         rej(RejectCode::UnsupportedVersion),
     ).authored(None).build();
 }
