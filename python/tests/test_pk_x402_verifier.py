@@ -523,6 +523,22 @@ def test_reject_unknown_fourth_instruction():
     assert e.value.code == "invalid_exact_svm_payload_unknown_fourth_instruction"
 
 
+def test_reject_extra_required_signer():
+    fee_payer, authority, pay_to, src, dest = _scenario()
+    extra = Keypair()
+    memo = Instruction(Pubkey.from_string(MEMO_PROGRAM), b"/pay", [AccountMeta(extra.pubkey(), True, False)])
+    ixs = [
+        _compute_limit_ix(),
+        _compute_price_ix(),
+        _transfer_checked_ix(source=src, mint=MINT, destination=dest, authority=authority.pubkey()),
+        memo,
+    ]
+    tx = _tx_b64(fee_payer, ixs, [fee_payer, authority, extra])
+    with pytest.raises(InvalidProofError) as e:
+        ExactVerifier.verify(tx, _requirement(pay_to), [str(fee_payer.pubkey())])
+    assert e.value.code == "invalid_exact_svm_payload_transaction_unexpected_signer"
+
+
 # -- rule 10: memo binding ---------------------------------------------------
 
 

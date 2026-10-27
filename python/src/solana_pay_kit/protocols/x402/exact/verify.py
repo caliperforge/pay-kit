@@ -180,6 +180,13 @@ class ExactVerifier:
         if expected_memo:
             ExactVerifier._find_memo_match(account_keys, instructions, expected_memo)
 
+        # §2.1.4: only the fee payer and the transfer authority may sign.
+        allowed_signers = (account_keys[0], transfer["authority"])
+        for signer in account_keys[: int(message.header.num_required_signatures)]:
+            if signer not in allowed_signers:
+                reason = "invalid_exact_svm_payload_transaction_unexpected_signer"
+                raise InvalidProofError(reason, code=reason)
+
         # The destination ATA must pre-exist; ATA-create is never accepted.
         transfer["destinationCreateAta"] = False
         return transfer
